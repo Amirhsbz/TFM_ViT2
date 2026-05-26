@@ -315,6 +315,18 @@ def _regularize_grid_with_missing_edge_column(
     if not missing_left and not missing_right:
         return None
 
+    # For the missing_right case, determine the expected x position of grid col 0
+    # from the rows that have exactly cols-1 detections (those rows start at col 0).
+    _missing_right_x_col0 = left_margin
+    if not missing_left:
+        x0_list = [
+            float(rp[np.argsort(rp[:, 0])][0, 0])
+            for rp in row_points
+            if len(rp) == cols - 1
+        ]
+        if x0_list:
+            _missing_right_x_col0 = float(np.median(x0_list))
+
     grid = np.zeros((rows, cols, 2), dtype=np.float32)
     for row, row_pts in enumerate(row_points):
         ordered = row_pts[np.argsort(row_pts[:, 0])]
@@ -333,11 +345,32 @@ def _regularize_grid_with_missing_edge_column(
                 grid[row, col, 0] = grid[row, col + 1, 0] - step
                 grid[row, col, 1] = grid[row, col + 1, 1]
         else:
-            take = ordered[: cols - 1] if len(ordered) >= cols - 1 else ordered
-            grid[row, : len(take), :] = take
-            for col in range(len(take), cols):
-                grid[row, col, 0] = grid[row, col - 1, 0] + step
-                grid[row, col, 1] = grid[row, col - 1, 1]
+            # For missing_right, anchor the first detected marker to the correct
+            # grid column rather than always assuming col 0.  Rows that are also
+            # missing their leftmost column(s) would otherwise be shifted right
+            # (their first detected marker placed at col 0, leaving the true col 0
+            # unrepresented and producing extra fake columns on the right).
+            x_first = float(ordered[0, 0])
+            start_col = max(0, int(round((x_first - _missing_right_x_col0) / step)))
+            start_col = min(start_col, cols - 1)
+            n_place = min(len(ordered), cols - 1 - start_col)
+            grid[row, start_col : start_col + n_place, :] = ordered[:n_place]
+            # Use a row-specific linear fit over the placed markers so that
+            # extrapolation accuracy does not depend on the global median step.
+            placed_col_indices = np.arange(start_col, start_col + n_place, dtype=np.float32)
+            placed_x = grid[row, start_col : start_col + n_place, 0]
+            placed_y = grid[row, start_col : start_col + n_place, 1]
+            if n_place >= 2:
+                x_fit = np.polyfit(placed_col_indices, placed_x, deg=1)
+            else:
+                x_fit = np.array([step, placed_x[0] - step * start_col]) if n_place == 1 else np.array([step, _missing_right_x_col0])
+            y_fill = float(np.median(placed_y)) if n_place >= 1 else row_centers[row]
+            for col in range(start_col - 1, -1, -1):
+                grid[row, col, 0] = float(np.polyval(x_fit, col))
+                grid[row, col, 1] = y_fill
+            for col in range(start_col + n_place, cols):
+                grid[row, col, 0] = float(np.polyval(x_fit, col))
+                grid[row, col, 1] = y_fill
 
     return grid
 

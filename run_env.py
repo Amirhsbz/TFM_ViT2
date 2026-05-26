@@ -460,7 +460,12 @@ def _update_marker_tracking(
     back_status = back_status.reshape(-1).astype(bool)
     fb_error = np.linalg.norm(back_points_all - ref_points_all, axis=1)
     on_marker_mask = _mask_contains_points(current_marker_mask, tracked_points_all)
-    valid = status & back_status & (fb_error <= fb_max_error) & on_marker_mask
+    # on_marker_mask is intentionally excluded from the validity gate.
+    # For sensors where some markers are dim (low local contrast), find_marker
+    # may not detect them as blobs even though they are physically present.
+    # The forward-backward error check already validates LK quality, so
+    # well-tracked points are accepted even if the blob detector misses them.
+    valid = status & back_status & (fb_error <= fb_max_error)
 
     if np.count_nonzero(valid) < min_valid_points:
         if reset_on_loss:

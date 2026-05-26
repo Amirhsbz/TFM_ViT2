@@ -21,7 +21,7 @@ Keys:
   q or Esc = quit
   
 测试的时候重新选点：
-python Data_analysis/select_tactile_crop_from_cameras.py \
+python -m Data_analysis.select_tactile_crop_from_cameras \
   --config-dir sensor_configs/put_bottle_upright_test \
   --output-size 320x240 \
   --overwrite
