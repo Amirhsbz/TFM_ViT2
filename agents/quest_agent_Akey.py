@@ -154,6 +154,7 @@ class SingleArmQuestAgent(Agent):
         self.gripper_angle = 0.0
         self.last_gripper_update = time.time()
         self.gripper_speed = 0.5
+        self.gripper_deadband = 0.05  # ignore grip values below this to prevent drift
         self.last_target_tcp_pose = None
         self.last_command_joint_state = None
 
@@ -207,8 +208,15 @@ class SingleArmQuestAgent(Agent):
             dt = max(now - self.last_gripper_update, 0.0)
             self.last_gripper_update = now
 
-            if _button_pressed(button_data, grip_key):
-                self.gripper_angle = min(self.gripper_angle + self.gripper_speed * dt, 1.0)
+            grip_raw = button_data.get(grip_key, (0.0,))
+            grip_value = float(grip_raw[0]) if isinstance(grip_raw, (tuple, list, np.ndarray)) else float(grip_raw)
+            open_raw = button_data.get("leftGrip", (0.0,))
+            open_value = float(open_raw[0]) if isinstance(open_raw, (tuple, list, np.ndarray)) else float(open_raw)
+            if grip_value > self.gripper_deadband:
+                # Scale speed proportionally to grip pressure for precise control
+                self.gripper_angle = min(self.gripper_angle + self.gripper_speed * dt * grip_value, 1.0)
+            elif open_value > self.gripper_deadband:
+                self.gripper_angle = max(self.gripper_angle - self.gripper_speed * dt * open_value, 0.0)
             elif _button_pressed(button_data, close_grip_key):
                 self.gripper_angle = max(self.gripper_angle - self.gripper_speed * dt, 0.0)
 

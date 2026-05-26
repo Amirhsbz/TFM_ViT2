@@ -314,7 +314,7 @@ python run_env.py \
   --pi0-state-dim 135 \
   --pi0-include-tactile \
   --pi0-tactile-feature-mode image_embedding \
-  --pi0-tactile-embedding-dim 128 \
+  --pi0-tactile-embedding-dim 16 \
   --pi0-action-chunk-size 6
 ```
 

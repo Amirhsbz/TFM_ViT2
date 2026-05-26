@@ -98,7 +98,7 @@ def capture_frames(cap, device_name, frame_queue):
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 1)
         
         try:
-            frame_queue.put(frame, timeout=0.1)
+            frame_queue.put_nowait(frame)
         except queue.Full:
             pass  # Drop frame if queue is full
 
@@ -189,23 +189,21 @@ def display_multiple_cameras(device_paths, width=640, height=480):
     
     device_names = list(caps.keys())
     frame_count = 0
-    
+    # Cache last received frame per camera to avoid black flicker when queue is momentarily empty
+    cached_frames = {name: np.zeros((display_h, display_w, 3), dtype=np.uint8) for name in device_names}
+
     while True:
         # Create grid canvas
         canvas = np.zeros((rows * display_h, cols * display_w, 3), dtype=np.uint8)
-        
+
         # Collect frames from all cameras
-        all_have_frames = True
         for idx, device_name in enumerate(device_names):
             try:
-                frame = frame_queues[device_name].get(timeout=0.01)
+                frame = frame_queues[device_name].get_nowait()
+                cached_frames[device_name] = cv2.resize(frame, (display_w, display_h))
             except queue.Empty:
-                all_have_frames = False
-                continue
-            
-            # Resize frame
-            resized = cv2.resize(frame, (display_w, display_h))
-            
+                pass  # Reuse cached frame to avoid flickering
+
             # Place in grid
             row = idx // cols
             col = idx % cols
@@ -213,8 +211,8 @@ def display_multiple_cameras(device_paths, width=640, height=480):
             y_end = y_start + display_h
             x_start = col * display_w
             x_end = x_start + display_w
-            
-            canvas[y_start:y_end, x_start:x_end] = resized
+
+            canvas[y_start:y_end, x_start:x_end] = cached_frames[device_name]
         
         # Add frame counter
         cv2.putText(canvas, f"Frame: {frame_count}", (10, 30),

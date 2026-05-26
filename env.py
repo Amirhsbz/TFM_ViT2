@@ -135,6 +135,7 @@ class RobotEnv:
             for name in list(self._camera_dict.keys()):
                 cv2.namedWindow(name, cv2.WINDOW_NORMAL)
         self._save_depth = save_depth
+        self.last_cv2_key: int = -1  # last non-(-1) key seen by cv2.waitKey in get_obs
 
     def robot(self) -> Robot:
         """Get the robot object.
@@ -268,7 +269,9 @@ class RobotEnv:
                         display_depth = np.zeros((raw.shape[0], raw.shape[1]), dtype=np.uint16)
                 image_depth = self._compose_camera_view(display_image, display_depth)
                 cv2.imshow(name, image_depth)
-                cv2.waitKey(1)
+                _k = cv2.waitKey(1) & 0xFF
+                if _k != 255:
+                    self.last_cv2_key = _k
 
         robot_obs = self._robot.get_observations()
         for k, v in robot_obs.items():

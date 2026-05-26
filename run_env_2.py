@@ -36,8 +36,10 @@ trigger_state = {"r": False, "l": False, "s": False, "d": False}
 # Mapping for tactile camera names to v4l2 by-path ports (persistent device paths)
 # Change these paths to match your actual v4l/by-path devices
 TACTILE_CAM_PORTS = {
-    "left": "/dev/v4l/by-path/pci-0000:80:14.0-usb-0:5.4:1.0-video-index0",
-    "right": "/dev/v4l/by-path/pci-0000:80:14.0-usb-0:1.3.4:1.0-video-index0",  # Update with your actual by-path
+    # "left": "/dev/v4l/by-path/pci-0000:80:14.0-usb-0:1.3.4:1.0-video-index0",
+    "left": "/dev/v4l/by-path/pci-0000:80:14.0-usbv2-0:1.4:1.0-video-index0",
+    # "right": "/dev/v4l/by-path/pci-0000:80:14.0-usbv2-0:5.4:1.0-video-index0",  # Update with your actual by-path
+    "right": "/dev/v4l/by-path/pci-0000:80:14.0-usbv2-0:2:1.0-video-index0",
     # Fallback to int IDs if needed
     "2": 2,
     "4": 4,
@@ -95,14 +97,10 @@ def _resolve_camera_id(camera_identifier):
     
     raise ValueError(f"Invalid camera identifier: {camera_identifier}")
 
-trigger_press_count: dict[str, int] = {}
-
-
 def listen_key(key):
-    global trigger_state, trigger_press_count
+    global trigger_state
     try:
         trigger_state[key.char] = True
-        trigger_press_count[key.char] = trigger_press_count.get(key.char, 0) + 1
     except:
         pass
 
@@ -1093,7 +1091,7 @@ def main(args):
         # using grippers
         #To-do   90
         # reset_joints = np.deg2rad([-82, -102, -70, -98, 86, 90, 0])
-        reset_joints = np.deg2rad([-87, -88, -112, -67, 90, 0, 0])
+        reset_joints = np.deg2rad([0, -88, -112, -67, 90, 0, 0])
     else:
         from agents.dp_agent import get_reset_joints
 
@@ -1198,22 +1196,14 @@ def main(args):
                 time.sleep(0.05)
             time.sleep(0.1)  # debounce
 
-            # Wait for single rocker click.
-            # For Quest: use rising-edge detection on the joystick.
-            # For keyboard: snapshot the press counter so even a fast tap that completes
-            # before the 50 ms poll fires is reliably detected.
-            if has_oculus:
-                prev_rocker_wait = False
-                while True:
-                    rocker_wait = _is_rocker_pressed(agent)
-                    if rocker_wait and not prev_rocker_wait:
-                        break
-                    prev_rocker_wait = rocker_wait
-                    time.sleep(0.05)
-            else:
-                r_count_before = trigger_press_count.get("r", 0)
-                while trigger_press_count.get("r", 0) == r_count_before:
-                    time.sleep(0.05)
+            # Wait for single rocker click (rising edge)
+            prev_rocker_wait = False
+            while True:
+                rocker_wait = _is_rocker_pressed(agent)
+                if rocker_wait and not prev_rocker_wait:
+                    break
+                prev_rocker_wait = rocker_wait
+                time.sleep(0.05)
 
             # Move to initial position
             print_color("\nMoving to initial position...", color="cyan")
@@ -1257,11 +1247,6 @@ def main(args):
             frame_freq = []
             prev_b_pressed = False
             stop_type = None  # "double" → save, "triple" → delete
-
-            # Snapshot keyboard press counts so a quick tap during agent.act() isn't missed
-            s_count_before = trigger_press_count.get("s", 0)
-            d_count_before = trigger_press_count.get("d", 0)
-            env.last_cv2_key = -1  # clear any stale key before recording starts
 
             # Click detection state
             prev_rocker = False
@@ -1349,9 +1334,7 @@ def main(args):
                                         state.display_window,
                                         cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR),
                                     )
-                                    _k = cv2.waitKey(1) & 0xFF
-                                    if _k != 255:
-                                        env.last_cv2_key = _k
+                                    cv2.waitKey(1)
 
                     if haptics_sender is not None:
                         sum_motion = max(
@@ -1448,20 +1431,8 @@ def main(args):
 
                     # Stop detection
                     if not has_oculus:
-                        # Keyboard mode: s=stop+save, d=stop+delete.
-                        # Dual detection: pynput counter (works when terminal has focus)
-                        # and cv2.waitKey (works when a cv2 window has focus).
-                        _cv2_key = env.last_cv2_key
-                        env.last_cv2_key = -1  # consume
-                        _s = (
-                            trigger_press_count.get("s", 0) > s_count_before
-                            or _cv2_key == ord("s")
-                        )
-                        _d = (
-                            trigger_press_count.get("d", 0) > d_count_before
-                            or _cv2_key == ord("d")
-                        )
-                        if _s:
+                        # Keyboard mode: s=stop+save, d=stop+delete
+                        if trigger_state.get("s", False):
                             print_color(
                                 "\n[s] pressed, stopping and saving trajectory.",
                                 color="yellow",
@@ -1469,7 +1440,7 @@ def main(args):
                             )
                             stop_type = "double"
                             break
-                        elif _d:
+                        elif trigger_state.get("d", False):
                             print_color(
                                 "\n[d] pressed, stopping and deleting trajectory.",
                                 color="red",
