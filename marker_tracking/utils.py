@@ -137,10 +137,42 @@ def _filtered_marker_centers_from_props(
     return filtered
 
 
+def _apply_broken_cells_fill(
+    grid: np.ndarray,
+    broken_cells: set[tuple[int, int]],
+    row_centers: np.ndarray,
+) -> np.ndarray:
+    """Re-fill specific grid cells by interpolation, ignoring their current values."""
+    grid = grid.copy()
+    rows, cols = grid.shape[:2]
+    valid = np.ones((rows, cols), dtype=bool)
+    for r, c in broken_cells:
+        if 0 <= r < rows and 0 <= c < cols:
+            valid[r, c] = False
+    col_centers = np.median(grid[:, :, 0], axis=0)
+    for row in range(rows):
+        if np.count_nonzero(valid[row]) >= 2:
+            cols_valid = np.flatnonzero(valid[row]).astype(np.float32)
+            x_valid = grid[row, valid[row], 0]
+            y_valid = grid[row, valid[row], 1]
+            x_fit = np.polyfit(cols_valid, x_valid, deg=1)
+            y_fill = float(np.median(y_valid))
+            for col in range(cols):
+                if not valid[row, col]:
+                    grid[row, col] = (float(np.polyval(x_fit, col)), y_fill)
+        else:
+            for col in range(cols):
+                if not valid[row, col]:
+                    grid[row, col] = (col_centers[col], row_centers[row])
+    return grid
+
+
 def _regularize_marker_grid(
     centers: list[tuple[float, float]],
     grid_shape: tuple[int, int],
     image_shape: tuple[int, ...] | None = None,
+    broken_cells: set[tuple[int, int]] | None = None,
+    n_missing_right_cols: int = 0,
 ) -> list[list[float]]:
     """Return a stable row-major marker grid, filling missing cells if needed.
 
@@ -150,6 +182,14 @@ def _regularize_marker_grid(
     rows x cols lattice, removes duplicate assignments, and fills empty cells
     from the inferred row/column centers. The filled points are only used as
     initial LK tracking points; later validation still rejects bad tracks.
+
+    broken_cells: set of (row, col) 0-indexed positions that are physically
+        broken and should always be filled by interpolation regardless of
+        what the blob detector finds there.
+
+    n_missing_right_cols: number of rightmost grid columns that are physically
+        absent. Detection is restricted to the remaining left columns, and the
+        missing right columns are extrapolated from the detected spacing.
     """
     rows, cols = grid_shape
     expected = rows * cols
@@ -165,42 +205,81 @@ def _regularize_marker_grid(
     row_centers = _kmeans_1d(pts[:, 1], rows)
     row_labels = np.argmin(np.abs(pts[:, 1:2] - row_centers[None, :]), axis=1)
 
+    # Columns actually expected from detection; right-side may be physically absent.
+    effective_cols = cols - max(0, n_missing_right_cols)
+
     row_points: list[np.ndarray] = []
     for row in range(rows):
         row_pts = pts[row_labels == row]
-        row_points.append(_select_regular_row_points(row_pts, cols))
+        row_points.append(_select_regular_row_points(row_pts, effective_cols))
 
-    missing_edge_grid = _regularize_grid_with_missing_edge_column(
-        row_points, row_centers, rows, cols, image_shape=image_shape
-    )
-    if missing_edge_grid is not None:
-        return missing_edge_grid.reshape(expected, 2).astype(float).tolist()
+    _broken_gripper_active = bool(broken_cells) or n_missing_right_cols > 0
 
-    complete_rows = [row_pts for row_pts in row_points if len(row_pts) == cols]
+    # Missing-edge-column heuristic only applies when not forcing right-col fill.
+    if n_missing_right_cols <= 0:
+        missing_edge_grid = _regularize_grid_with_missing_edge_column(
+            row_points, row_centers, rows, cols, image_shape=image_shape
+        )
+        if missing_edge_grid is not None:
+            if broken_cells:
+                missing_edge_grid = _apply_broken_cells_fill(
+                    missing_edge_grid, broken_cells, row_centers
+                )
+            if _broken_gripper_active and image_shape is not None:
+                _h, _w = image_shape[:2]
+                missing_edge_grid[:, :, 0] = np.clip(missing_edge_grid[:, :, 0], 0, _w - 1)
+                missing_edge_grid[:, :, 1] = np.clip(missing_edge_grid[:, :, 1], 0, _h - 1)
+            return missing_edge_grid.reshape(expected, 2).astype(float).tolist()
+
+    complete_rows = [row_pts for row_pts in row_points if len(row_pts) == effective_cols]
     if complete_rows:
         template = np.median(np.stack(complete_rows, axis=0), axis=0)
-        col_centers = template[:, 0]
+        col_centers_eff = template[:, 0]
     else:
-        col_centers = _kmeans_1d(pts[:, 0], cols)
+        all_x = (
+            np.concatenate([r[:, 0] for r in row_points if len(r) > 0])
+            if any(len(r) > 0 for r in row_points)
+            else pts[:, 0]
+        )
+        col_centers_eff = _kmeans_1d(all_x, effective_cols)
+
+    # Extrapolate column centers for the physically absent right columns.
+    if n_missing_right_cols > 0 and len(col_centers_eff) >= 2:
+        step = float(np.median(np.diff(col_centers_eff)))
+        last_x = float(col_centers_eff[-1])
+        extra = np.array(
+            [last_x + step * (i + 1) for i in range(n_missing_right_cols)],
+            dtype=np.float32,
+        )
+        col_centers = np.concatenate([col_centers_eff, extra])
+    else:
+        col_centers = col_centers_eff
 
     grid = np.zeros((rows, cols, 2), dtype=np.float32)
     valid = np.zeros((rows, cols), dtype=bool)
     for row, row_pts in enumerate(row_points):
         if len(row_pts) == 0:
             continue
-        if len(row_pts) == cols:
-            grid[row] = row_pts
-            valid[row] = True
+        if len(row_pts) == effective_cols:
+            grid[row, :effective_cols] = row_pts
+            valid[row, :effective_cols] = True
             continue
 
-        labels = np.argmin(np.abs(row_pts[:, 0:1] - col_centers[None, :]), axis=1)
-        for point, col in zip(row_pts, labels):
-            col = int(col)
-            if (not valid[row, col]) or abs(point[0] - col_centers[col]) < abs(
-                grid[row, col, 0] - col_centers[col]
-            ):
-                grid[row, col] = point
-                valid[row, col] = True
+        labels = np.argmin(np.abs(row_pts[:, 0:1] - col_centers[:effective_cols][None, :]), axis=1)
+        for point, col_idx in zip(row_pts, labels):
+            col_idx = int(col_idx)
+            if col_idx < effective_cols:
+                if (not valid[row, col_idx]) or abs(point[0] - col_centers[col_idx]) < abs(
+                    grid[row, col_idx, 0] - col_centers[col_idx]
+                ):
+                    grid[row, col_idx] = point
+                    valid[row, col_idx] = True
+
+    # Force broken interior cells to be re-derived by interpolation.
+    if broken_cells:
+        for r, c in broken_cells:
+            if 0 <= r < rows and 0 <= c < cols:
+                valid[r, c] = False
 
     for row in range(rows):
         if np.count_nonzero(valid[row]) >= 2:
@@ -216,6 +295,11 @@ def _regularize_marker_grid(
             for col in range(cols):
                 if not valid[row, col]:
                     grid[row, col] = (col_centers[col], row_centers[row])
+
+    if _broken_gripper_active and image_shape is not None:
+        _h, _w = image_shape[:2]
+        grid[:, :, 0] = np.clip(grid[:, :, 0], 0, _w - 1)
+        grid[:, :, 1] = np.clip(grid[:, :, 1], 0, _h - 1)
 
     return grid.reshape(expected, 2).astype(float).tolist()
 
@@ -379,13 +463,29 @@ def find_marker_centers(
     marker_img: np.ndarray,
     expected_grid: tuple[int, int] | None = (6, 9),
     regularize_grid: bool = True,
+    broken_cells: set[tuple[int, int]] | None = None,
+    n_missing_right_cols: int = 0,
+    detection_margin: int = 0,
 ):
     props = find_marker_props(marker_img)
     centers = _filtered_marker_centers_from_props(props)
     if not centers:
         centers = [[prop.centroid[1], prop.centroid[0]] for prop in props]
+    if detection_margin > 0:
+        h, w = marker_img.shape[:2]
+        centers = [
+            (x, y) for x, y in centers
+            if detection_margin <= x < w - detection_margin
+            and detection_margin <= y < h - detection_margin
+        ]
     if regularize_grid and expected_grid is not None:
-        return _regularize_marker_grid(centers, expected_grid, image_shape=marker_img.shape)
+        return _regularize_marker_grid(
+            centers,
+            expected_grid,
+            image_shape=marker_img.shape,
+            broken_cells=broken_cells,
+            n_missing_right_cols=n_missing_right_cols,
+        )
     return [[float(x), float(y)] for x, y in centers]
 
 def plot_marker_center(img:np.ndarray, centers:np.ndarray):

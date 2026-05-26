@@ -316,6 +316,25 @@ class HeadsetHapticsSender:
             self.sock.close()
 
 
+def _build_sensor_find_marker_kwargs(args: "Args", sensor_name: str) -> dict:
+    """Return per-sensor kwargs for find_marker_centers based on broken-gripper config."""
+    kwargs: dict = {}
+    if sensor_name == "tactile_left":
+        rs, re, cs, ce = args.left_marker_broken_region
+        if rs > 0 and re >= rs and cs > 0 and ce >= cs:
+            broken: set[tuple[int, int]] = set()
+            for r in range(rs - 1, re):
+                for c in range(cs - 1, ce):
+                    broken.add((r, c))
+            kwargs["broken_cells"] = broken
+    elif sensor_name == "tactile_right":
+        if args.right_marker_missing_right_cols > 0:
+            kwargs["n_missing_right_cols"] = args.right_marker_missing_right_cols
+    if args.marker_detection_margin > 0:
+        kwargs["detection_margin"] = args.marker_detection_margin
+    return kwargs
+
+
 def _build_marker_tracking_params(args: "Args") -> dict:
     return {
         "morphop_kernel": cv2.getStructuringElement(
@@ -341,12 +360,13 @@ def _init_marker_tracking_state(
     frame: np.ndarray | None,
     marker_tracking_params: dict,
     create_window: bool,
+    find_marker_kwargs: dict | None = None,
 ) -> MarkerTrackingState | None:
     if frame is None:
         return None
 
     marker_mask = find_marker(frame, **marker_tracking_params)
-    centers = find_marker_centers(marker_mask)
+    centers = find_marker_centers(marker_mask, **(find_marker_kwargs or {}))
     if not centers:
         print_color(
             f"[marker_tracking] {sensor_name}: no markers found in initial frame",
@@ -408,6 +428,7 @@ def _update_marker_tracking(
     motion_release_smoothing: float,
     min_valid_points: int,
     compensate_global_drift: bool,
+    find_marker_kwargs: dict | None = None,
 ) -> tuple[MarkerTrackingState | None, np.ndarray | None, float | None]:
     if frame is None:
         return state, None, None
@@ -418,6 +439,7 @@ def _update_marker_tracking(
             frame=frame,
             marker_tracking_params=marker_tracking_params,
             create_window=False,
+            find_marker_kwargs=find_marker_kwargs,
         )
         if state is None or state.ref_points is None or state.ref_gray is None:
             return state, None, None
@@ -433,7 +455,8 @@ def _update_marker_tracking(
     if next_points is None or status is None:
         if reset_on_loss:
             return _init_marker_tracking_state(
-                state.name, frame, marker_tracking_params, create_window=False
+                state.name, frame, marker_tracking_params, create_window=False,
+                find_marker_kwargs=find_marker_kwargs,
             ), None, None
         return state, None, None
 
@@ -447,7 +470,8 @@ def _update_marker_tracking(
     if back_points is None or back_status is None:
         if reset_on_loss:
             return _init_marker_tracking_state(
-                state.name, frame, marker_tracking_params, create_window=False
+                state.name, frame, marker_tracking_params, create_window=False,
+                find_marker_kwargs=find_marker_kwargs,
             ), None, None
         return state, None, None
 
@@ -470,7 +494,8 @@ def _update_marker_tracking(
     if np.count_nonzero(valid) < min_valid_points:
         if reset_on_loss:
             return _init_marker_tracking_state(
-                state.name, frame, marker_tracking_params, create_window=False
+                state.name, frame, marker_tracking_params, create_window=False,
+                find_marker_kwargs=find_marker_kwargs,
             ), None, None
         return state, None, 0.0
 
@@ -535,6 +560,7 @@ def _update_obs_marker_tracking(
             motion_release_smoothing=args.marker_motion_release_smoothing,
             min_valid_points=args.marker_motion_min_valid_points,
             compensate_global_drift=args.marker_motion_compensate_global_drift,
+            find_marker_kwargs=_build_sensor_find_marker_kwargs(args, sensor_name),
         )
         marker_tracking_states[sensor_name] = state
         marker_motion[sensor_name] = motion or 0.0
@@ -1016,6 +1042,12 @@ class Args:
     marker_motion_release_smoothing: float = 0.8
     marker_motion_min_valid_points: int = 8
     marker_motion_compensate_global_drift: bool = True
+    left_marker_broken_region: tuple[int, int, int, int] = (0, 0, 0, 0)
+    """Broken interior region for left tactile (1-indexed inclusive): row_start row_end col_start col_end. All-zero disables."""
+    right_marker_missing_right_cols: int = 0
+    """Number of rightmost marker columns physically absent on the right tactile sensor (will be extrapolated)."""
+    marker_detection_margin: int = 0
+    """Ignore marker detections within this many pixels of the image edge (filters border artifacts)."""
     headset_haptics_host: str = "192.168.1.126"
     headset_haptics_port: int = 9000
     haptics_min_motion: float = 0.0
@@ -1261,6 +1293,7 @@ def main(args):
                 frame=obs.get(obs_key),
                 marker_tracking_params=marker_tracking_params,
                 create_window=args.marker_tracking_show_view,
+                find_marker_kwargs=_build_sensor_find_marker_kwargs(args, sensor_name),
             )
     else:
         marker_tracking_states = {}
