@@ -1,5 +1,4 @@
 import datetime
-import json
 import os
 import pickle
 import shutil
@@ -37,8 +36,10 @@ trigger_state = {"r": False, "l": False, "s": False, "d": False}
 # Mapping for tactile camera names to v4l2 by-path ports (persistent device paths)
 # Change these paths to match your actual v4l/by-path devices
 TACTILE_CAM_PORTS = {
-    "left": "/dev/v4l/by-path/pci-0000:80:14.0-usb-0:5.4:1.0-video-index0",
-    "right": "/dev/v4l/by-path/pci-0000:80:14.0-usb-0:1.3.4:1.0-video-index0",  # Update with your actual by-path
+    # "left": "/dev/v4l/by-path/pci-0000:80:14.0-usb-0:1.3.4:1.0-video-index0",
+    "left": "/dev/v4l/by-path/pci-0000:80:14.0-usbv2-0:1.4:1.0-video-index0",
+    # "right": "/dev/v4l/by-path/pci-0000:80:14.0-usbv2-0:5.4:1.0-video-index0",  # Update with your actual by-path
+    "right": "/dev/v4l/by-path/pci-0000:80:14.0-usbv2-0:2:1.0-video-index0",
     # Fallback to int IDs if needed
     "2": 2,
     "4": 4,
@@ -65,66 +66,6 @@ def _resolve_tactile_warp_config(config_path: str, sensor_name: str):
         "Expected one of: "
         + ", ".join(candidates)
     )
-
-
-def _load_tactile_crop_configs(config_dir: str):
-    """Load task-specific post-warp tactile crop configs."""
-    if not config_dir:
-        return {}
-
-    config_dir = Path(config_dir).expanduser()
-    configs = {}
-    for sensor_name in ("tactile_left", "tactile_right"):
-        suffix = sensor_name.replace("tactile_", "")
-        candidates = [
-            config_dir / f"{sensor_name}_rgb.json",
-            config_dir / f"{sensor_name}.json",
-            config_dir / f"sensor_config_{suffix}.json",
-            config_dir / f"sensor_config_{sensor_name}.json",
-        ]
-        config_path = next((path for path in candidates if path.exists()), None)
-        if config_path is None:
-            raise FileNotFoundError(
-                f"No tactile crop config found for {sensor_name} in {config_dir}. "
-                f"Expected one of: {', '.join(str(path) for path in candidates)}"
-            )
-
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        entry = config.get(sensor_name) or config.get(sensor_name.replace("tactile_", "")) or config
-        points = np.array(entry["points"], dtype=np.float32)
-        if points.shape != (4, 2):
-            raise ValueError(f"{config_path} points must have shape (4, 2), got {points.shape}")
-        out_width, out_height = entry.get("output_size", entry.get("size", (320, 240)))
-        dst_pts = np.array(
-            [[0, 0], [out_width, 0], [out_width, out_height], [0, out_height]],
-            dtype=np.float32,
-        )
-        configs[sensor_name] = {
-            "path": config_path,
-            "matrix": cv2.getPerspectiveTransform(points, dst_pts),
-            "size": (int(out_width), int(out_height)),
-        }
-    return configs
-
-
-def _apply_tactile_crop_configs(
-    obs: Dict[str, np.ndarray],
-    crop_configs: dict,
-    input_size: tuple[int, int],
-) -> None:
-    if not crop_configs:
-        return
-
-    for sensor_name, config in crop_configs.items():
-        obs_key = f"{sensor_name}_rgb"
-        frame = obs.get(obs_key)
-        if not isinstance(frame, np.ndarray) or frame.ndim != 3:
-            continue
-        if frame.shape[1] != input_size[0] or frame.shape[0] != input_size[1]:
-            frame = cv2.resize(frame, input_size, interpolation=cv2.INTER_AREA)
-        obs[obs_key] = cv2.warpPerspective(frame, config["matrix"], config["size"])
-
 
 def _resolve_camera_id(camera_identifier):
     """Resolve camera identifier to either int device ID or v4l/by-path string.
@@ -156,14 +97,10 @@ def _resolve_camera_id(camera_identifier):
     
     raise ValueError(f"Invalid camera identifier: {camera_identifier}")
 
-trigger_press_count: dict[str, int] = {}
-
-
 def listen_key(key):
-    global trigger_state, trigger_press_count
+    global trigger_state
     try:
         trigger_state[key.char] = True
-        trigger_press_count[key.char] = trigger_press_count.get(key.char, 0) + 1
     except:
         pass
 
@@ -380,16 +317,9 @@ def _init_marker_tracking_state(
     return state
 
 
-def _mask_contains_points(mask: np.ndarray, points: np.ndarray, radius: int = 3) -> np.ndarray:
+def _mask_contains_points(mask: np.ndarray, points: np.ndarray) -> np.ndarray:
     if len(points) == 0:
         return np.zeros(0, dtype=bool)
-
-    if radius > 0:
-        kernel_size = radius * 2 + 1
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
-        )
-        mask = cv2.dilate(mask, kernel, iterations=1)
 
     h, w = mask.shape[:2]
     rounded = np.rint(points).astype(np.int32)
@@ -512,56 +442,6 @@ def _is_right_b_pressed(agent) -> bool:
         return False
     _, button_data = oculus_reader.get_transformations_and_buttons()
     return bool(button_data.get("B", False))
-
-
-def _update_obs_marker_tracking(
-    obs: Dict[str, np.ndarray],
-    args: "Args",
-    marker_tracking_states: dict[str, MarkerTrackingState | None],
-    marker_tracking_params: dict,
-    lk_params: dict,
-    marker_motion: dict[str, float],
-) -> None:
-    if not (args.enable_marker_tracking and args.use_tactile):
-        return
-
-    for sensor_name in ("tactile_left", "tactile_right"):
-        obs_key = f"{sensor_name}_rgb"
-        tracking_key = f"{sensor_name}_marker_tracking"
-        state, overlay, motion = _update_marker_tracking(
-            sensor_name=sensor_name,
-            frame=obs.get(obs_key),
-            state=marker_tracking_states.get(sensor_name),
-            marker_tracking_params=marker_tracking_params,
-            lk_params=lk_params,
-            reset_on_loss=args.marker_tracking_reset_on_loss,
-            arrow_scale=args.marker_arrow_scale,
-            fb_max_error=args.marker_flow_fb_max_error,
-            motion_deadband=args.marker_motion_deadband,
-            motion_smoothing=args.marker_motion_smoothing,
-            motion_release_smoothing=args.marker_motion_release_smoothing,
-            min_valid_points=args.marker_motion_min_valid_points,
-            compensate_global_drift=args.marker_motion_compensate_global_drift,
-        )
-        marker_tracking_states[sensor_name] = state
-        marker_motion[sensor_name] = motion or 0.0
-        obs[f"{sensor_name}_marker_motion"] = np.array(
-            marker_motion[sensor_name], dtype=np.float32
-        )
-        if overlay is not None:
-            obs[tracking_key] = overlay
-            if args.use_marker_tracking_overlay_for_policy:
-                obs[obs_key] = overlay
-            if (
-                args.marker_tracking_show_view
-                and state is not None
-                and state.display_window is not None
-            ):
-                cv2.imshow(
-                    state.display_window,
-                    cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR),
-                )
-                cv2.waitKey(1)
 
 
 def _is_rocker_pressed(agent) -> bool:
@@ -999,11 +879,7 @@ class Args:
     tactile_height: int = 480  # Tactile camera resolution height
     save_tactile_width: int = 320  # Saved tactile image width
     save_tactile_height: int = 240  # Saved tactile image height
-    tactile_crop_config_dir: str = ""
-    tactile_crop_input_width: int = 320
-    tactile_crop_input_height: int = 240
     enable_marker_tracking: bool = True
-    use_marker_tracking_overlay_for_policy: bool = False
     marker_tracking_show_view: bool = True
     marker_tracking_reset_on_loss: bool = True
     marker_flow_win_size: tuple[int, int] = (15, 15)
@@ -1083,27 +959,6 @@ class Args:
 
 def main(args):
     marker_tracking_params = _build_marker_tracking_params(args)
-    if args.agent in ("pi0", "pi0_eef") and args.use_marker_tracking_overlay_for_policy:
-        if not args.pi0_include_tactile or args.pi0_tactile_feature_mode != "image_embedding":
-            print_color(
-                "[pi0] warning: --use-marker-tracking-overlay-for-policy is enabled, "
-                "but pi0 tactile embedding is not enabled. Add "
-                "--pi0-include-tactile --pi0-tactile-feature-mode image_embedding "
-                "for a tactile pi0 checkpoint.",
-                color="yellow",
-                attrs=("bold",),
-            )
-    tactile_crop_configs = _load_tactile_crop_configs(args.tactile_crop_config_dir)
-    tactile_crop_input_size = (
-        int(args.tactile_crop_input_width),
-        int(args.tactile_crop_input_height),
-    )
-    for sensor_name, config in tactile_crop_configs.items():
-        print(
-            f"Tactile post-crop config - {sensor_name}: {config['path']} "
-            f"input={tactile_crop_input_size[0]}x{tactile_crop_input_size[1]} "
-            f"output={config['size'][0]}x{config['size'][1]}"
-        )
     lk_params = {
         "winSize": tuple(args.marker_flow_win_size),
         "maxLevel": args.marker_flow_max_level,
@@ -1236,7 +1091,7 @@ def main(args):
         # using grippers
         #To-do   90
         # reset_joints = np.deg2rad([-82, -102, -70, -98, 86, 90, 0])
-        reset_joints = np.deg2rad([-87, -88, -112, -67, 90, 0, 0])
+        reset_joints = np.deg2rad([0, -88, -112, -67, 90, 0, 0])
     else:
         from agents.dp_agent import get_reset_joints
 
@@ -1250,7 +1105,6 @@ def main(args):
         env.step(jnt)
 
     obs = env.get_obs()
-    _apply_tactile_crop_configs(obs, tactile_crop_configs, tactile_crop_input_size)
     marker_tracking_states: dict[str, MarkerTrackingState | None] = {}
     marker_motion = {"tactile_left": 0.0, "tactile_right": 0.0}
     if args.enable_marker_tracking and args.use_tactile:
@@ -1293,28 +1147,16 @@ def main(args):
     else:
         print("Headset haptics disabled")
 
-    _update_obs_marker_tracking(
-        obs,
-        args,
-        marker_tracking_states,
-        marker_tracking_params,
-        lk_params,
-        marker_motion,
-    )
-    policy_obs = (
-        obs if args.use_marker_tracking_overlay_for_policy else _policy_obs_with_raw_tactile(obs)
-    )
     if args.jit_compile and args.agent.startswith(("dp", "act")):
         agent.compile_inference(
-            policy_obs, num_diffusion_iters=args.num_diffusion_iters_compile
+            obs, num_diffusion_iters=args.num_diffusion_iters_compile
         )
         _reset_agent_temporal_state(agent)
     # going to start position
     print("Going to start position")
-    start_pos = agent.act(policy_obs)  # in mujoco
+    start_pos = agent.act(_policy_obs_with_raw_tactile(obs))  # in mujoco
     _reset_agent_temporal_state(agent)
     obs = env.get_obs()
-    _apply_tactile_crop_configs(obs, tactile_crop_configs, tactile_crop_input_size)
     joints = obs["joint_positions"]
 
     ur_idx = [i for i in range(min(6, len(joints)))]
@@ -1354,22 +1196,14 @@ def main(args):
                 time.sleep(0.05)
             time.sleep(0.1)  # debounce
 
-            # Wait for single rocker click.
-            # For Quest: use rising-edge detection on the joystick.
-            # For keyboard: snapshot the press counter so even a fast tap that completes
-            # before the 50 ms poll fires is reliably detected.
-            if has_oculus:
-                prev_rocker_wait = False
-                while True:
-                    rocker_wait = _is_rocker_pressed(agent)
-                    if rocker_wait and not prev_rocker_wait:
-                        break
-                    prev_rocker_wait = rocker_wait
-                    time.sleep(0.05)
-            else:
-                r_count_before = trigger_press_count.get("r", 0)
-                while trigger_press_count.get("r", 0) == r_count_before:
-                    time.sleep(0.05)
+            # Wait for single rocker click (rising edge)
+            prev_rocker_wait = False
+            while True:
+                rocker_wait = _is_rocker_pressed(agent)
+                if rocker_wait and not prev_rocker_wait:
+                    break
+                prev_rocker_wait = rocker_wait
+                time.sleep(0.05)
 
             # Move to initial position
             print_color("\nMoving to initial position...", color="cyan")
@@ -1414,11 +1248,6 @@ def main(args):
             prev_b_pressed = False
             stop_type = None  # "double" → save, "triple" → delete
 
-            # Snapshot keyboard press counts so a quick tap during agent.act() isn't missed
-            s_count_before = trigger_press_count.get("s", 0)
-            d_count_before = trigger_press_count.get("d", 0)
-            env.last_cv2_key = -1  # clear any stale key before recording starts
-
             # Click detection state
             prev_rocker = False
             rocker_click_count = 0
@@ -1437,6 +1266,16 @@ def main(args):
                         end="",
                         flush=True,
                     )
+                    if args.safe:
+                        action = safety_wrapper.act_safe(
+                            agent,
+                            _policy_obs_with_raw_tactile(obs),
+                            eef=(args.agent.endswith("_eef")),
+                        )
+                    else:
+                        action = agent.act(_policy_obs_with_raw_tactile(obs))
+                    dt = datetime.datetime.now()
+
                     b_pressed = _is_right_b_pressed(agent)
                     if (
                         args.enable_marker_tracking
@@ -1460,29 +1299,42 @@ def main(args):
                         )
                     prev_b_pressed = b_pressed
 
-                    _update_obs_marker_tracking(
-                        obs,
-                        args,
-                        marker_tracking_states,
-                        marker_tracking_params,
-                        lk_params,
-                        marker_motion,
-                    )
-
-                    policy_obs = (
-                        obs
-                        if args.use_marker_tracking_overlay_for_policy
-                        else _policy_obs_with_raw_tactile(obs)
-                    )
-                    if args.safe:
-                        action = safety_wrapper.act_safe(
-                            agent,
-                            policy_obs,
-                            eef=(args.agent.endswith("_eef")),
-                        )
-                    else:
-                        action = agent.act(policy_obs)
-                    dt = datetime.datetime.now()
+                    if args.enable_marker_tracking and args.use_tactile:
+                        for sensor_name in ("tactile_left", "tactile_right"):
+                            obs_key = f"{sensor_name}_rgb"
+                            tracking_key = f"{sensor_name}_marker_tracking"
+                            state, overlay, motion = _update_marker_tracking(
+                                sensor_name=sensor_name,
+                                frame=obs.get(obs_key),
+                                state=marker_tracking_states.get(sensor_name),
+                                marker_tracking_params=marker_tracking_params,
+                                lk_params=lk_params,
+                                reset_on_loss=args.marker_tracking_reset_on_loss,
+                                arrow_scale=args.marker_arrow_scale,
+                                fb_max_error=args.marker_flow_fb_max_error,
+                                motion_deadband=args.marker_motion_deadband,
+                                motion_smoothing=args.marker_motion_smoothing,
+                                motion_release_smoothing=args.marker_motion_release_smoothing,
+                                min_valid_points=args.marker_motion_min_valid_points,
+                                compensate_global_drift=args.marker_motion_compensate_global_drift,
+                            )
+                            marker_tracking_states[sensor_name] = state
+                            marker_motion[sensor_name] = motion or 0.0
+                            obs[f"{sensor_name}_marker_motion"] = np.array(
+                                marker_motion[sensor_name], dtype=np.float32
+                            )
+                            if overlay is not None:
+                                obs[tracking_key] = overlay
+                                if (
+                                    args.marker_tracking_show_view
+                                    and state is not None
+                                    and state.display_window is not None
+                                ):
+                                    cv2.imshow(
+                                        state.display_window,
+                                        cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR),
+                                    )
+                                    cv2.waitKey(1)
 
                     if haptics_sender is not None:
                         sum_motion = max(
@@ -1573,29 +1425,14 @@ def main(args):
                         obs = env.step_eef(action)
                     else:
                         obs = env.step(action)
-                    _apply_tactile_crop_configs(
-                        obs, tactile_crop_configs, tactile_crop_input_size
-                    )
 
                     ff = 1 / (time.time() - new_start_time)
                     frame_freq.append(ff)
 
                     # Stop detection
                     if not has_oculus:
-                        # Keyboard mode: s=stop+save, d=stop+delete.
-                        # Dual detection: pynput counter (works when terminal has focus)
-                        # and cv2.waitKey (works when a cv2 window has focus).
-                        _cv2_key = env.last_cv2_key
-                        env.last_cv2_key = -1  # consume
-                        _s = (
-                            trigger_press_count.get("s", 0) > s_count_before
-                            or _cv2_key == ord("s")
-                        )
-                        _d = (
-                            trigger_press_count.get("d", 0) > d_count_before
-                            or _cv2_key == ord("d")
-                        )
-                        if _s:
+                        # Keyboard mode: s=stop+save, d=stop+delete
+                        if trigger_state.get("s", False):
                             print_color(
                                 "\n[s] pressed, stopping and saving trajectory.",
                                 color="yellow",
@@ -1603,7 +1440,7 @@ def main(args):
                             )
                             stop_type = "double"
                             break
-                        elif _d:
+                        elif trigger_state.get("d", False):
                             print_color(
                                 "\n[d] pressed, stopping and deleting trajectory.",
                                 color="red",

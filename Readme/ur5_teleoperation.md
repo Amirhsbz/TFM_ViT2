@@ -59,7 +59,7 @@ Quest agent created
 5. VR眼镜按左边圆点开机
 6. 加载节点：运行`python launch_nodes.py`，不要关掉
 7. 眼镜操作设置：
-   1. 戴眼镜，点开主页的`notification - usb detected`，点击允许debugging，在主页选择底部状态栏的安卓图标，点击弹出窗口，进入
+   1. 戴眼镜，点开主页的`notification - usb detected`，点击允许debug，在主页选择底部状态栏的安卓图标，点击弹出窗口，进入
    2. 在屏幕按食指，感受到震动说明已连接
    3. 把眼镜倒放在桌上，手柄放在眼镜前面让它检测到，按下食指确认依然有震动
 8. 开启机械臂控制：查看`QUICK_START.md`

@@ -86,7 +86,7 @@ class ImageSee():
                 break
 
 if __name__ == "__main__":
-    video = cv2.VideoCapture(0)  # camera port
+    video = cv2.VideoCapture(3)  # camera port
     ImSv = ImageSee(video)
     ImSv.ref_capture()
     ImSv.save_images()

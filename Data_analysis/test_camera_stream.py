@@ -211,7 +211,9 @@ def display_multiple_cameras(device_paths, width=640, height=480):
     
     device_names = list(caps.keys())
     frame_count = 0
-    
+    # Cache last received frame per camera to avoid black flicker when queue is momentarily empty
+    cached_frames = {name: np.zeros((display_h, display_w, 3), dtype=np.uint8) for name in device_names}
+
     while True:
         # Create grid canvas
         canvas = np.zeros((rows * display_h, cols * display_w, 3), dtype=np.uint8)
@@ -233,6 +235,7 @@ def display_multiple_cameras(device_paths, width=640, height=480):
             # Resize frame
             resized = cv2.resize(frame, (display_w, display_h))
             
+
             # Place in grid
             row = idx // cols
             col = idx % cols
@@ -240,8 +243,8 @@ def display_multiple_cameras(device_paths, width=640, height=480):
             y_end = y_start + display_h
             x_start = col * display_w
             x_end = x_start + display_w
-            
-            canvas[y_start:y_end, x_start:x_end] = resized
+
+            canvas[y_start:y_end, x_start:x_end] = cached_frames[device_name]
         
         # Add frame counter
         cv2.putText(canvas, f"Frame: {frame_count}", (10, 30),
