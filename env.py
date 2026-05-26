@@ -262,11 +262,6 @@ class RobotEnv:
             if self._show_camera_view:
                 display_image = image
                 display_depth = depth
-                if hasattr(camera, "get_last_raw_frame_rgb") and name.startswith("tactile_"):
-                    raw = camera.get_last_raw_frame_rgb()
-                    if raw is not None:
-                        display_image = raw
-                        display_depth = np.zeros((raw.shape[0], raw.shape[1]), dtype=np.uint16)
                 image_depth = self._compose_camera_view(display_image, display_depth)
                 cv2.imshow(name, image_depth)
                 _k = cv2.waitKey(1) & 0xFF

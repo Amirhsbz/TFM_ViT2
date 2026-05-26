@@ -263,8 +263,10 @@ python run_env.py \
 `--tactile-crop-config-dir` 会把实时触觉图像先按该任务的裁剪配置处理，
 再生成 marker tracking 箭头图；因此弹出的
 `tactile_left_marker_tracking` / `tactile_right_marker_tracking` 窗口显示的也是裁剪后的版本。
-这些裁剪配置默认假设输入图像尺寸为 320x240；如果你的实时触觉中间图尺寸不同，
-可以用 `--tactile-crop-input-width` 和 `--tactile-crop-input-height` 调整。
+这些裁剪配置默认假设输入图像尺寸为 320x240；传入 `--tactile-crop-config-dir`
+后，实时触觉相机也会先输出 320x240，和训练 H5 中用于选点的图像尺寸保持一致。
+如果你的训练数据使用了其他触觉图像尺寸，可以用 `--tactile-crop-input-width`
+和 `--tactile-crop-input-height` 调整。
 
 程序启动后会先把机器人移动到 reset joints，然后提示：
 - 按一下并松开键盘 r：移动到初始位置并开始执行 policy

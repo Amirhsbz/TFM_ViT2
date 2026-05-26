@@ -1087,6 +1087,7 @@ def main(args):
         right_cam_id = _resolve_camera_id(args.tactile_right_camera_id)
         left_warp_config = _resolve_tactile_warp_config("", "tactile_left")
         right_warp_config = _resolve_tactile_warp_config("", "tactile_right")
+        tactile_output_size = tactile_crop_input_size if tactile_crop_configs else None
         
         camera_clients["tactile_left"] = OpenCVCamera(
             camera_id=left_cam_id,
@@ -1094,6 +1095,7 @@ def main(args):
             height=args.tactile_height,
             perspective_config_path=left_warp_config,
             perspective_key="tactile_left",
+            output_size=tactile_output_size,
         )
         camera_clients["tactile_right"] = OpenCVCamera(
             camera_id=right_cam_id,
@@ -1101,6 +1103,7 @@ def main(args):
             height=args.tactile_height,
             perspective_config_path=right_warp_config,
             perspective_key="tactile_right",
+            output_size=tactile_output_size,
         )
         print(f"Tactile sensors enabled - Left: {left_cam_id}, Right: {right_cam_id}")
         print(
@@ -1108,6 +1111,11 @@ def main(args):
             f"Left: {left_warp_config or 'disabled'}, "
             f"Right: {right_warp_config or 'disabled'}"
         )
+        if tactile_output_size is not None:
+            print(
+                "Tactile runtime image size matched to crop config input: "
+                f"{tactile_output_size[0]}x{tactile_output_size[1]}"
+            )
     else:
         print("Tactile sensors disabled")
     

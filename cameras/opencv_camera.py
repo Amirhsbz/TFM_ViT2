@@ -63,6 +63,7 @@ class OpenCVCamera:
         height: int = 480,
         perspective_config_path: Optional[str] = None,
         perspective_key: Optional[str] = None,
+        output_size: Optional[Tuple[int, int]] = None,
     ):
         """Initialize the OpenCV camera.
 
@@ -76,12 +77,14 @@ class OpenCVCamera:
             perspective_config_path: Optional path to a JSON config with four corner
                 points for perspective rectification.
             perspective_key: Optional key inside the JSON config, e.g. "tactile_left".
+            output_size: Optional default returned image size as (width, height).
         """
         self.camera_id = camera_id
         self._perspective_transform = None
         self._perspective_size = None
         self._perspective_config_path = perspective_config_path
         self._perspective_key = perspective_key
+        self._output_size = output_size
         self._last_raw_frame_rgb = None
         
         # Support v4l2 by-path, regular v4l2 paths, and int device IDs
@@ -229,8 +232,9 @@ class OpenCVCamera:
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
         # Resize if needed
-        if img_size is not None:
-            frame_rgb = cv2.resize(frame_rgb, img_size)
+        output_size = img_size or self._output_size
+        if output_size is not None:
+            frame_rgb = cv2.resize(frame_rgb, output_size, interpolation=cv2.INTER_AREA)
         
         # Create empty depth image (webcams don't have depth)
         depth = np.zeros((frame_rgb.shape[0], frame_rgb.shape[1]), dtype=np.uint16)
