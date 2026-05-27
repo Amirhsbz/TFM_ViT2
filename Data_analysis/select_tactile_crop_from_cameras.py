@@ -22,7 +22,7 @@ Keys:
   
 测试的时候重新选点：
 python -m Data_analysis.select_tactile_crop_from_cameras \
-  --config-dir sensor_configs/put_bottle_upright_test \
+  --config-dir sensor_configs/peg_in_hole_test \
   --output-size 320x240 \
   --overwrite
 """

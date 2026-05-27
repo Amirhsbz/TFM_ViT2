@@ -252,8 +252,8 @@ python run_env.py \
 
 如果当前相机位置或分辨率和采集训练数据时不一致，先用当前触觉相机画面重新选测试裁剪框：
 
-python Data_analysis/select_tactile_crop_from_cameras.py \
-  --config-dir sensor_configs/put_bottle_upright_test \
+python -m Data_analysis.select_tactile_crop_from_cameras \
+  --config-dir sensor_configs/wipe_board_test \
   --output-size 320x240 \
   --overwrite
 
@@ -396,7 +396,7 @@ python run_env.py \
   --pi0-tactile-feature-mode image_embedding \
   --use-tactile \
   --enable-marker-tracking \
-  --tactile-crop-config-dir sensor_configs/put_bottle_upright_test \
+  --tactile-crop-config-dir sensor_configs/wipe_board_test \
   --use-marker-tracking-overlay-for-policy \
   --hz 15 \
   --safe
