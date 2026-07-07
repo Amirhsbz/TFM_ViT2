@@ -25,7 +25,9 @@ def from_pickle(path, load_img = True, num_cam = 3):
 
 def _decode_h5_video_frames(dataset, *, is_depth=False):
     video_bytes = np.asarray(dataset, dtype=np.uint8).tobytes()
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+    codec = str(dataset.attrs.get("codec", "mp4v"))
+    suffix = ".avi" if codec == "MJPG" else ".mp4"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(video_bytes)
         tmp_path = tmp.name
 

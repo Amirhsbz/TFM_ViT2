@@ -91,7 +91,7 @@ def launch_robot_server(port: int, args: Args):
 
 # Camera aliases. RealSense aliases are resolved to serial numbers at runtime.
 CAM_PORTS = {
-    "first_view": "143322072669",
+    "first_view": "338622073293",
     "third_view": "213622078586",
 }
 

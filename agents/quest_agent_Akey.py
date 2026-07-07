@@ -158,6 +158,23 @@ class SingleArmQuestAgent(Agent):
         self.last_target_tcp_pose = None
         self.last_command_joint_state = None
 
+    def reset_temporal_state(self) -> None:
+        """Reset all inter-frame control state between trajectories.
+
+        Called by _reset_agent_temporal_state() in run_env_logi.py before each
+        new trajectory. Clears last_command_joint_state so the first trigger press
+        of a new trajectory anchors its reference to the current reset position
+        rather than the final position of the previous trajectory.
+        """
+        self.control_active = False
+        self.reference_quest_pose = None
+        self.reference_ee_rot_ur = None
+        self.reference_ee_pos_ur = None
+        self.last_target_tcp_pose = None
+        self.last_command_joint_state = None
+        self.gripper_angle = 0.0
+        self.last_gripper_update = time.time()
+
     def act(self, obs: Dict[str, np.ndarray]) -> np.ndarray:
         if self.robot_type == "ur5":
             num_dof = 6
@@ -361,13 +378,36 @@ class SingleArmQuestAgent(Agent):
                 if self._verbose:
                     print("control activated!")
                 self.reference_quest_pose = pose_data[pose_key]
-                self.reference_ee_rot_ur = current_ee_rot_ur
-                self.reference_ee_pos_ur = current_ee_pos_ur
+                # Anchor the reference EE pose to the last *commanded* (held) position,
+                # not the lagging measured position. If re-pressed while the robot is
+                # still converging toward the held command, using measured would set
+                # reference behind the current EE position, causing velocity IK to
+                # compute a backward error and push the robot back.
+                if self.last_command_joint_state is not None:
+                    ref_qpos = self.last_command_joint_state[:num_dof]
+                    self.physics.data.qpos[:num_dof] = ref_qpos
+                    self.physics.step()
+                    ref_ee_rot_mj = np.array(
+                        self.physics.named.data.site_xmat["attachment_site"]
+                    ).reshape(3, 3)
+                    ref_ee_pos_mj = np.array(
+                        self.physics.named.data.site_xpos["attachment_site"]
+                    )
+                    self.reference_ee_rot_ur = mj2ur[:3, :3] @ ref_ee_rot_mj
+                    self.reference_ee_pos_ur = apply_transfer(mj2ur, ref_ee_pos_mj)
+                    # Restore physics to measured state (next act() call will also reset it)
+                    self.physics.data.qpos[:num_dof] = current_qpos
+                    self.physics.step()
+                    first_frame_command = np.concatenate([ref_qpos, new_gripper_angle])
+                else:
+                    self.reference_ee_rot_ur = current_ee_rot_ur
+                    self.reference_ee_pos_ur = current_ee_pos_ur
+                    first_frame_command = arm_not_move_return
                 self.last_target_tcp_pose = _tcp_pose_from_pos_rot(
-                    current_ee_pos_ur, current_ee_rot_ur
+                    self.reference_ee_pos_ur, self.reference_ee_rot_ur
                 )
-                self.last_command_joint_state = arm_not_move_return.copy()
-                return arm_not_move_return
+                self.last_command_joint_state = first_frame_command.copy()
+                return first_frame_command
             
         else:
             if self._verbose:
@@ -377,8 +417,17 @@ class SingleArmQuestAgent(Agent):
             self.last_target_tcp_pose = _tcp_pose_from_pos_rot(
                 current_ee_pos_ur, current_ee_rot_ur
             )
-            self.last_command_joint_state = arm_not_move_return.copy()
-            return arm_not_move_return
+            # Hold the last commanded position (not the lagging measured current_qpos).
+            # servoJ with lookahead_time=0.2 commits to trajectories ahead of time, so
+            # sending current_qpos (behind the last new_qpos) causes the robot to snap
+            # back. Using last_command_joint_state keeps the robot at the intended target.
+            if self.last_command_joint_state is not None:
+                hold_joints = self.last_command_joint_state[:num_dof]
+                hold_command = np.concatenate([hold_joints, new_gripper_angle])
+            else:
+                hold_command = arm_not_move_return
+            self.last_command_joint_state = hold_command.copy()
+            return hold_command
 
 
 class DualArmQuestAgent(Agent):

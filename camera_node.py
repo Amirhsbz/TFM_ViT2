@@ -112,8 +112,18 @@ class ZMQServerCameraFaster:
 
     def _refresh_buffer(self):
         """Periodically refresh the buffer."""
+        consecutive_failures = 0
         while not self._stop_event.is_set():
-            self.cam_buffer = self._camera.read()
+            try:
+                self.cam_buffer = self._camera.read()
+                consecutive_failures = 0
+            except Exception as exc:
+                consecutive_failures += 1
+                # Print every failure so the user knows the camera is having trouble.
+                # Without this the thread crashes silently and cam_buffer freezes.
+                print(f"[CameraServer] camera.read() failed (attempt {consecutive_failures}): {exc}")
+                if consecutive_failures >= 10:
+                    print("[CameraServer] 10 consecutive failures — camera may be disconnected.")
             time.sleep(self.refresh_interval)
 
     def stop(self) -> None:

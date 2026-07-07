@@ -726,14 +726,16 @@ class H5TrajectoryWriter:
     def _append_video_frame(self, key: str, array: np.ndarray, extra_attrs: dict | None = None) -> None:
         writer = self.video_writers.get(key)
         if writer is None:
-            temp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            # MJPG (Motion JPEG) is an intra-frame codec built into OpenCV on all
+            # platforms — it never fails silently the way mp4v does on Linux without FFmpeg.
+            temp_file = tempfile.NamedTemporaryFile(suffix=".avi", delete=False)
             temp_file.close()
             self.video_tempfiles[key] = temp_file
             height, width = array.shape[:2]
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            fourcc = cv2.VideoWriter_fourcc(*"MJPG")
             writer = cv2.VideoWriter(temp_file.name, fourcc, self.video_fps, (width, height))
             if not writer.isOpened():
-                raise RuntimeError(f"Failed to open MP4 writer for key '{key}'")
+                raise RuntimeError(f"Failed to open MJPG writer for key '{key}'")
             self.video_writers[key] = writer
             video_ds = self.videos_group.create_dataset(
                 key,
@@ -745,7 +747,7 @@ class H5TrajectoryWriter:
             video_ds.attrs["height"] = height
             video_ds.attrs["width"] = width
             video_ds.attrs["channels"] = array.shape[2]
-            video_ds.attrs["codec"] = "mp4v"
+            video_ds.attrs["codec"] = "MJPG"
             if extra_attrs is not None:
                 for attr_key, attr_value in extra_attrs.items():
                     video_ds.attrs[attr_key] = attr_value
@@ -805,6 +807,10 @@ class H5TrajectoryWriter:
         )
 
         for key, value in obs_to_save.items():
+            if value is None:
+                # Skip None values (e.g. camera returning None when ZMQ buffer is empty).
+                # Writing them would create a string dataset that later frames can't match.
+                continue
             array = np.asarray(value)
             video_streams = list(self._iter_video_streams(key, array))
             if video_streams:
@@ -923,7 +929,7 @@ class Args:
     use_vel_ik: bool = False
 
     use_audio: bool = True  # capture Logitech mic alongside trajectories
-    audio_device: int = 14   # sounddevice device index; -1 = system default input
+    audio_device: int = 13   # sounddevice device index for Logi C310 mic; -1 = system default input
     audio_sample_rate: int = 16000
     audio_channels: int = 1
     audio_chunk_size: int = 4096
@@ -1286,6 +1292,13 @@ def main(args):
                         f"Invalid save_format: {args.save_format}. Expected 'h5' or 'pkl'."
                     )
                 if audio_stream is not None:
+                    # Discard audio that accumulated while waiting for the start
+                    # button press — otherwise the wav would be longer than the video.
+                    while True:
+                        try:
+                            audio_queue.get_nowait()
+                        except queue.Empty:
+                            break
                     wav_writer = wave.open(str(save_path / "audio.wav"), "wb")
                     wav_writer.setnchannels(args.audio_channels)
                     wav_writer.setsampwidth(2)  # int16

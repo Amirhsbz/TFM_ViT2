@@ -38,7 +38,9 @@ def export_videos(h5_path: Path, output_dir: Path) -> list[dict]:
 
         print(f"Found {len(f['videos'])} embedded video stream(s)")
         for key, ds in sorted(f["videos"].items()):
-            output_path = output_dir / f"{key}.mp4"
+            codec = str(ds.attrs.get("codec", "mp4v"))
+            ext = ".avi" if codec == "MJPG" else ".mp4"
+            output_path = output_dir / f"{key}{ext}"
             video_bytes = np.asarray(ds, dtype=np.uint8).tobytes()
             output_path.write_bytes(video_bytes)
             attrs = dict(ds.attrs)
@@ -96,9 +98,13 @@ def _fit_frame(frame: np.ndarray, width: int, height: int) -> np.ndarray:
 def _resolve_stream_paths(output_dir: Path, preferred_order: list[str]) -> list[Path]:
     video_paths = []
     for name in preferred_order:
-        path = output_dir / name
-        if path.exists():
-            video_paths.append(path)
+        stem = Path(name).stem
+        # Try .avi first (MJPG codec from newer recordings), then .mp4 (legacy mp4v)
+        for ext in (".avi", ".mp4"):
+            path = output_dir / (stem + ext)
+            if path.exists():
+                video_paths.append(path)
+                break
     return video_paths
 
 

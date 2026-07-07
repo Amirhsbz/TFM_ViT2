@@ -122,14 +122,15 @@ class H5TrajectoryWriter:
     ) -> None:
         writer = self.video_writers.get(key)
         if writer is None:
-            temp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            # MJPG (Motion JPEG) is always available in OpenCV on all platforms.
+            temp_file = tempfile.NamedTemporaryFile(suffix=".avi", delete=False)
             temp_file.close()
             self.video_tempfiles[key] = temp_file
             height, width = array.shape[:2]
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            fourcc = cv2.VideoWriter_fourcc(*"MJPG")
             writer = cv2.VideoWriter(temp_file.name, fourcc, self.video_fps, (width, height))
             if not writer.isOpened():
-                raise RuntimeError(f"Failed to open MP4 writer for key '{key}'")
+                raise RuntimeError(f"Failed to open MJPG writer for key '{key}'")
             self.video_writers[key] = writer
             video_ds = self.videos_group.create_dataset(
                 key,
@@ -141,7 +142,7 @@ class H5TrajectoryWriter:
             video_ds.attrs["height"] = height
             video_ds.attrs["width"] = width
             video_ds.attrs["channels"] = array.shape[2]
-            video_ds.attrs["codec"] = "mp4v"
+            video_ds.attrs["codec"] = "MJPG"
             if extra_attrs is not None:
                 for attr_key, attr_value in extra_attrs.items():
                     video_ds.attrs[attr_key] = attr_value
@@ -183,6 +184,8 @@ class H5TrajectoryWriter:
 
     def append(self, timestamp, record: dict[str, np.ndarray]) -> None:
         for key, value in record.items():
+            if value is None:
+                continue
             array = np.asarray(value)
             video_streams = list(self._iter_video_streams(key, array))
             if video_streams:

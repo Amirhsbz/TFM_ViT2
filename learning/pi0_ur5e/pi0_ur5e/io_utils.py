@@ -72,7 +72,9 @@ def decode_h5_video(dataset, *, is_depth: bool = False) -> np.ndarray:
     import cv2
 
     video_bytes = np.asarray(dataset, dtype=np.uint8).tobytes()
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+    codec = str(dataset.attrs.get("codec", "mp4v"))
+    suffix = ".avi" if codec == "MJPG" else ".mp4"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(video_bytes)
         tmp_path = Path(tmp.name)
     frames = []
