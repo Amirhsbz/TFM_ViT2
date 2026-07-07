@@ -243,7 +243,7 @@ python run_env.py \
   --hz 15 \
   --safe \
   --save-data \
-  --data-dir ./shared/data/bc_data/dp_rollouts \
+  --data-dir ./shared/data/bc_data/dp_rollouts
 
 如果 DP 是用 marker tracking overlay 版触觉视频训练的，例如
 `shared/data/bc_data/put_bottle_upright_tactile_crop` 中的
@@ -398,8 +398,7 @@ python run_env.py \
   --enable-marker-tracking \
   --tactile-crop-config-dir sensor_configs/put_bottle_upright_test \
   --use-marker-tracking-overlay-for-policy \
-  --hz 15 \
-  --safe
+  --swap-tactile-lr-for-policy
 
 这时 pi0 的 `tactile_left_rgb` / `tactile_right_rgb` 输入，以及
 `tactile_left_marker_tracking` / `tactile_right_marker_tracking` 显示窗口，

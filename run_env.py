@@ -187,14 +187,27 @@ def print_color(*args, color=None, attrs=(), **kwargs):
     print(*args, **kwargs)
 
 
-def _policy_obs_with_raw_tactile(obs: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
-    """Feed raw tactile frames to the policy while preserving env/display obs."""
+def _policy_obs_for_agent(
+    obs: Dict[str, np.ndarray],
+    *,
+    use_marker_tracking_overlay_for_policy: bool,
+    swap_tactile_lr_for_policy: bool,
+) -> Dict[str, np.ndarray]:
+    """Build policy obs while preserving env/display obs."""
     policy_obs = dict(obs)
-    for sensor_name in ("tactile_left", "tactile_right"):
-        raw_key = f"{sensor_name}_raw_rgb"
-        rgb_key = f"{sensor_name}_rgb"
-        if raw_key in obs:
-            policy_obs[rgb_key] = obs[raw_key]
+    if not use_marker_tracking_overlay_for_policy:
+        for sensor_name in ("tactile_left", "tactile_right"):
+            raw_key = f"{sensor_name}_raw_rgb"
+            rgb_key = f"{sensor_name}_rgb"
+            if raw_key in obs:
+                policy_obs[rgb_key] = obs[raw_key]
+
+    if swap_tactile_lr_for_policy:
+        left = policy_obs.get("tactile_left_rgb")
+        right = policy_obs.get("tactile_right_rgb")
+        if left is not None and right is not None:
+            policy_obs["tactile_left_rgb"] = right
+            policy_obs["tactile_right_rgb"] = left
     return policy_obs
 
 
@@ -1021,6 +1034,8 @@ class Args:
     tactile_crop_config_dir: str = ""
     tactile_crop_input_width: int = 320
     tactile_crop_input_height: int = 240
+    swap_tactile_lr_for_policy: bool = False
+    """Swap tactile_left_rgb and tactile_right_rgb only for policy inference."""
     enable_marker_tracking: bool = True
     use_marker_tracking_overlay_for_policy: bool = False
     marker_tracking_show_view: bool = True
@@ -1127,6 +1142,12 @@ def main(args):
         print(
             f"Tactile camera crop config - {sensor_name}: {config['path']} "
             f"output={config['size'][0]}x{config['size'][1]}"
+        )
+    if args.swap_tactile_lr_for_policy:
+        print_color(
+            "Tactile policy input swap enabled: tactile_left_rgb <-> tactile_right_rgb",
+            color="yellow",
+            attrs=("bold",),
         )
     lk_params = {
         "winSize": tuple(args.marker_flow_win_size),
@@ -1334,8 +1355,10 @@ def main(args):
         lk_params,
         marker_motion,
     )
-    policy_obs = (
-        obs if args.use_marker_tracking_overlay_for_policy else _policy_obs_with_raw_tactile(obs)
+    policy_obs = _policy_obs_for_agent(
+        obs,
+        use_marker_tracking_overlay_for_policy=args.use_marker_tracking_overlay_for_policy,
+        swap_tactile_lr_for_policy=args.swap_tactile_lr_for_policy,
     )
     if args.jit_compile and args.agent.startswith(("dp", "act")):
         agent.compile_inference(
@@ -1502,10 +1525,10 @@ def main(args):
                         marker_motion,
                     )
 
-                    policy_obs = (
-                        obs
-                        if args.use_marker_tracking_overlay_for_policy
-                        else _policy_obs_with_raw_tactile(obs)
+                    policy_obs = _policy_obs_for_agent(
+                        obs,
+                        use_marker_tracking_overlay_for_policy=args.use_marker_tracking_overlay_for_policy,
+                        swap_tactile_lr_for_policy=args.swap_tactile_lr_for_policy,
                     )
                     if args.safe:
                         action = safety_wrapper.act_safe(
