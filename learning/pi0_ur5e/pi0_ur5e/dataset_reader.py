@@ -25,6 +25,7 @@ DEFAULT_FIELD_MAP = {
     "tactile": ["tactile", "touch", "force", "pressure"],
     "tactile_left_rgb": ["tactile_left_rgb", "left_tactile_rgb", "observation.images.tactile_left_rgb"],
     "tactile_right_rgb": ["tactile_right_rgb", "right_tactile_rgb", "observation.images.tactile_right_rgb"],
+    "contact_gate": ["contact_gate", "observation.contact_gate"],
     "language_instruction": ["language_instruction", "prompt", "task"],
 }
 
@@ -297,14 +298,24 @@ class DatasetReader:
         if self.config.tactile_feature_mode == "image_embedding":
             left = self._stack_or_paths(frames, "tactile_left_rgb")
             right = self._stack_or_paths(frames, "tactile_right_rgb")
-            return tactile_images_to_embeddings(
+            gate = self._numeric_series(frames, "contact_gate")
+            if gate is not None:
+                left = _replace_tactile_precontact_with_baseline(left, gate)
+                right = _replace_tactile_precontact_with_baseline(right, gate)
+            tactile = tactile_images_to_embeddings(
                 left,
                 right,
                 embedding_dim=self.config.tactile_embedding_dim,
             )
+            return tactile
         tactile = self._numeric_series(frames, "tactile")
         if self.config.tactile_feature_mode == "low_dim":
-            return tactile_to_features(tactile)
+            features = tactile_to_features(tactile)
+            gate = self._numeric_series(frames, "contact_gate")
+            if features is not None and gate is not None:
+                features = features.copy()
+                features[np.asarray(gate).reshape(-1)[: len(features)] <= 0.5] = 0.0
+            return features
         return tactile
 
     def _first_value(self, frames: list[dict[str, Any]], canonical: str) -> Any:
@@ -386,6 +397,22 @@ def _to_numpy(value: Any) -> np.ndarray:
     if hasattr(value, "detach"):
         value = value.detach().cpu().numpy()
     return np.asarray(value)
+
+
+def _replace_tactile_precontact_with_baseline(value: Any, gate: np.ndarray | None) -> Any:
+    if value is None or gate is None:
+        return value
+    if not isinstance(value, np.ndarray) or value.ndim < 4:
+        return value
+    out = value.copy()
+    replace_mask = np.asarray(gate, dtype=np.float32).reshape(-1)[: len(out)] <= 0.5
+    precontact_indices = np.flatnonzero(replace_mask)
+    if len(precontact_indices) == 0:
+        return out
+    baseline_indices = precontact_indices[:20]
+    baseline = np.median(out[baseline_indices].astype(np.float32), axis=0)
+    out[: len(replace_mask)][replace_mask] = np.clip(np.rint(baseline), 0, 255).astype(out.dtype)
+    return out
 
 
 def _image_to_hwc(value: Any) -> np.ndarray:

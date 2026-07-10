@@ -29,6 +29,7 @@ from marker_tracking.utils import (
     find_marker_centers,
     plot_marker_delta,
 )
+from learning.tactile_contact_gate import apply_contact_gate_to_tactile_obs
 from robot_node import ZMQClientRobot
 from udp_haptics_sender import clamp01, send_packet
 
@@ -192,6 +193,8 @@ def _policy_obs_for_agent(
     *,
     use_marker_tracking_overlay_for_policy: bool,
     swap_tactile_lr_for_policy: bool,
+    gate_tactile_for_policy: bool,
+    tactile_neutral_baseline: dict[str, np.ndarray] | None = None,
 ) -> Dict[str, np.ndarray]:
     """Build policy obs while preserving env/display obs."""
     policy_obs = dict(obs)
@@ -202,13 +205,61 @@ def _policy_obs_for_agent(
             if raw_key in obs:
                 policy_obs[rgb_key] = obs[raw_key]
 
+    neutral_baseline = dict(tactile_neutral_baseline or {})
     if swap_tactile_lr_for_policy:
         left = policy_obs.get("tactile_left_rgb")
         right = policy_obs.get("tactile_right_rgb")
         if left is not None and right is not None:
             policy_obs["tactile_left_rgb"] = right
             policy_obs["tactile_right_rgb"] = left
+        baseline_left = neutral_baseline.get("tactile_left_rgb")
+        baseline_right = neutral_baseline.get("tactile_right_rgb")
+        if baseline_left is not None and baseline_right is not None:
+            neutral_baseline["tactile_left_rgb"] = baseline_right
+            neutral_baseline["tactile_right_rgb"] = baseline_left
+    if gate_tactile_for_policy:
+        policy_obs = apply_contact_gate_to_tactile_obs(
+            policy_obs,
+            neutral_images=neutral_baseline,
+        )
     return policy_obs
+
+
+def _collect_tactile_neutral_baseline(
+    env: RobotEnv,
+    obs: Dict[str, np.ndarray],
+    *,
+    num_frames: int,
+    tactile_crop_configs: dict,
+    tactile_crop_input_size: tuple[int, int],
+) -> tuple[Dict[str, np.ndarray], dict[str, np.ndarray]]:
+    frames = {"tactile_left_rgb": [], "tactile_right_rgb": []}
+
+    def add_frame(frame_obs: Dict[str, np.ndarray]) -> None:
+        for key in frames:
+            if key in frame_obs and frame_obs[key] is not None:
+                frames[key].append(np.asarray(frame_obs[key]).copy())
+
+    add_frame(obs)
+    latest_obs = obs
+    for _ in range(max(0, int(num_frames) - 1)):
+        latest_obs = env.get_obs()
+        _apply_tactile_crop_configs(
+            latest_obs,
+            tactile_crop_configs,
+            tactile_crop_input_size,
+        )
+        add_frame(latest_obs)
+
+    baseline = {}
+    for key, values in frames.items():
+        if values:
+            baseline[key] = np.clip(
+                np.rint(np.median(np.stack(values).astype(np.float32), axis=0)),
+                0,
+                255,
+            ).astype(values[0].dtype)
+    return latest_obs, baseline
 
 
 @dataclass
@@ -218,6 +269,82 @@ class MarkerTrackingState:
     ref_points: np.ndarray | None = None
     display_window: str | None = None
     motion_ema: float = 0.0
+
+
+@dataclass
+class ContactGateState:
+    contact: bool = False
+    on_count: int = 0
+    off_count: int = 0
+    gripper_open_count: int = 0
+    gripper_was_closed: bool = False
+
+
+def _update_contact_gate(
+    state: ContactGateState,
+    motion: float,
+    *,
+    on_threshold: float,
+    off_threshold: float,
+    on_frames: int,
+    off_frames: int,
+    gripper_position: float | None = None,
+    gripper_on_threshold: float = 0.2,
+    gripper_open_threshold: float = 0.08,
+    gripper_closed_threshold: float = 0.2,
+    gripper_open_frames: int = 2,
+) -> float:
+    on_frames = max(1, int(on_frames))
+    off_frames = max(1, int(off_frames))
+    gripper_open_frames = max(1, int(gripper_open_frames))
+    if state.contact:
+        if gripper_position is not None and gripper_position >= gripper_closed_threshold:
+            state.gripper_was_closed = True
+        if motion < off_threshold:
+            state.off_count += 1
+        else:
+            state.off_count = 0
+        if (
+            gripper_position is not None
+            and state.gripper_was_closed
+            and gripper_position <= gripper_open_threshold
+        ):
+            state.gripper_open_count += 1
+        else:
+            state.gripper_open_count = 0
+        if state.off_count >= off_frames or state.gripper_open_count >= gripper_open_frames:
+            state.contact = False
+            state.off_count = 0
+            state.gripper_open_count = 0
+            state.gripper_was_closed = False
+        state.on_count = 0
+    else:
+        gripper_ready = (
+            gripper_position is None or gripper_position >= gripper_on_threshold
+        )
+        if motion > on_threshold and gripper_ready:
+            state.on_count += 1
+        else:
+            state.on_count = 0
+        if state.on_count >= on_frames:
+            state.contact = True
+            state.off_count = 0
+            state.gripper_open_count = 0
+            state.gripper_was_closed = (
+                gripper_position is not None
+                and gripper_position >= gripper_closed_threshold
+            )
+    return 1.0 if state.contact else 0.0
+
+
+def _obs_gripper_position(obs: Dict[str, np.ndarray]) -> float | None:
+    if obs.get("gripper_position") is not None:
+        return float(np.asarray(obs["gripper_position"]).reshape(-1)[0])
+    if obs.get("joint_positions") is not None:
+        joints = np.asarray(obs["joint_positions"], dtype=np.float32).reshape(-1)
+        if len(joints) > 6:
+            return float(joints[-1])
+    return None
 
 
 @dataclass
@@ -1057,6 +1184,16 @@ class Args:
     marker_motion_release_smoothing: float = 0.8
     marker_motion_min_valid_points: int = 8
     marker_motion_compensate_global_drift: bool = True
+    gate_tactile_for_policy: bool = True
+    contact_on_threshold: float = 6.0
+    contact_off_threshold: float = 3.0
+    contact_on_consecutive_frames: int = 2
+    contact_off_consecutive_frames: int = 4
+    contact_gripper_on_threshold: float = 0.2
+    contact_gripper_open_threshold: float = 0.08
+    contact_gripper_closed_threshold: float = 0.2
+    contact_gripper_open_consecutive_frames: int = 2
+    tactile_neutral_baseline_frames: int = 20
     left_marker_broken_region: tuple[int, int, int, int] = (0, 0, 0, 0)
     """Broken interior region for left tactile (1-indexed inclusive): row_start row_end col_start col_end. All-zero disables."""
     right_marker_missing_right_cols: int = 0
@@ -1304,8 +1441,22 @@ def main(args):
 
     obs = env.get_obs()
     _apply_tactile_crop_configs(obs, tactile_crop_configs, tactile_crop_input_size)
+    tactile_neutral_baseline: dict[str, np.ndarray] = {}
+    if args.use_tactile and args.gate_tactile_for_policy:
+        obs, tactile_neutral_baseline = _collect_tactile_neutral_baseline(
+            env,
+            obs,
+            num_frames=args.tactile_neutral_baseline_frames,
+            tactile_crop_configs=tactile_crop_configs,
+            tactile_crop_input_size=tactile_crop_input_size,
+        )
+        print(
+            "[tactile_gate] collected neutral tactile baseline "
+            f"from {args.tactile_neutral_baseline_frames} frame(s)"
+        )
     marker_tracking_states: dict[str, MarkerTrackingState | None] = {}
     marker_motion = {"tactile_left": 0.0, "tactile_right": 0.0}
+    contact_gate_state = ContactGateState()
     if args.enable_marker_tracking and args.use_tactile:
         for sensor_name in ("tactile_left", "tactile_right"):
             obs_key = f"{sensor_name}_rgb"
@@ -1355,10 +1506,29 @@ def main(args):
         lk_params,
         marker_motion,
     )
+    sum_motion = max(marker_motion["tactile_left"], marker_motion["tactile_right"])
+    obs["contact_gate"] = np.array(
+        _update_contact_gate(
+            contact_gate_state,
+            sum_motion,
+            on_threshold=args.contact_on_threshold,
+            off_threshold=args.contact_off_threshold,
+            on_frames=args.contact_on_consecutive_frames,
+            off_frames=args.contact_off_consecutive_frames,
+            gripper_position=_obs_gripper_position(obs),
+            gripper_on_threshold=args.contact_gripper_on_threshold,
+            gripper_open_threshold=args.contact_gripper_open_threshold,
+            gripper_closed_threshold=args.contact_gripper_closed_threshold,
+            gripper_open_frames=args.contact_gripper_open_consecutive_frames,
+        ),
+        dtype=np.float32,
+    )
     policy_obs = _policy_obs_for_agent(
         obs,
         use_marker_tracking_overlay_for_policy=args.use_marker_tracking_overlay_for_policy,
         swap_tactile_lr_for_policy=args.swap_tactile_lr_for_policy,
+        gate_tactile_for_policy=args.gate_tactile_for_policy,
+        tactile_neutral_baseline=tactile_neutral_baseline,
     )
     if args.jit_compile and args.agent.startswith(("dp", "act")):
         agent.compile_inference(
@@ -1509,6 +1679,15 @@ def main(args):
                                 create_window=False,
                             )
                             marker_motion[sensor_name] = 0.0
+                        contact_gate_state = ContactGateState()
+                        if args.gate_tactile_for_policy:
+                            obs, tactile_neutral_baseline = _collect_tactile_neutral_baseline(
+                                env,
+                                obs,
+                                num_frames=args.tactile_neutral_baseline_frames,
+                                tactile_crop_configs=tactile_crop_configs,
+                                tactile_crop_input_size=tactile_crop_input_size,
+                            )
                         print_color(
                             "\n[marker_tracking] reset tactile reference frame from right controller B",
                             color="cyan",
@@ -1524,11 +1703,33 @@ def main(args):
                         lk_params,
                         marker_motion,
                     )
+                    sum_motion = max(
+                        marker_motion["tactile_left"],
+                        marker_motion["tactile_right"],
+                    )
+                    obs["contact_gate"] = np.array(
+                        _update_contact_gate(
+                            contact_gate_state,
+                            sum_motion,
+                            on_threshold=args.contact_on_threshold,
+                            off_threshold=args.contact_off_threshold,
+                            on_frames=args.contact_on_consecutive_frames,
+                            off_frames=args.contact_off_consecutive_frames,
+                            gripper_position=_obs_gripper_position(obs),
+                            gripper_on_threshold=args.contact_gripper_on_threshold,
+                            gripper_open_threshold=args.contact_gripper_open_threshold,
+                            gripper_closed_threshold=args.contact_gripper_closed_threshold,
+                            gripper_open_frames=args.contact_gripper_open_consecutive_frames,
+                        ),
+                        dtype=np.float32,
+                    )
 
                     policy_obs = _policy_obs_for_agent(
                         obs,
                         use_marker_tracking_overlay_for_policy=args.use_marker_tracking_overlay_for_policy,
                         swap_tactile_lr_for_policy=args.swap_tactile_lr_for_policy,
+                        gate_tactile_for_policy=args.gate_tactile_for_policy,
+                        tactile_neutral_baseline=tactile_neutral_baseline,
                     )
                     if args.safe:
                         action = safety_wrapper.act_safe(
@@ -1541,10 +1742,6 @@ def main(args):
                     dt = datetime.datetime.now()
 
                     if haptics_sender is not None:
-                        sum_motion = max(
-                            marker_motion["tactile_left"],
-                            marker_motion["tactile_right"],
-                        )
                         motion_span = max(
                             haptics_sender.config.max_motion - haptics_sender.config.min_motion,
                             1e-6,

@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""Export and verify embedded videos from a TeleUR trajectory H5 file."""
+"""Export and verify embedded videos from a TeleUR trajectory H5 file.
+用--combined-only模式，只保存combined_2x2.mp4，临时的流文件会被删除。
+"""
 
 import argparse
+import shutil
+import tempfile
 from pathlib import Path
 
 import cv2
@@ -176,6 +180,37 @@ def export_combined_video(
     return out_path
 
 
+def export_combined_only(
+    h5_path: Path,
+    output_dir: Path,
+    fps: float,
+    preferred_order: list[str],
+    output_name: str,
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    final_path = output_dir / output_name
+
+    with tempfile.TemporaryDirectory(
+        prefix=f".{h5_path.stem}_combined_",
+        dir=output_dir.parent,
+    ) as tmp:
+        tmp_output_dir = Path(tmp)
+        export_videos(h5_path, tmp_output_dir)
+        combined_path = export_combined_video(
+            tmp_output_dir,
+            fps,
+            preferred_order,
+            output_name,
+        )
+        if combined_path is None or not combined_path.is_file():
+            raise FileNotFoundError(f"Combined video was not generated: {combined_path}")
+
+        shutil.copy2(combined_path, final_path)
+
+    print(f"Done. Exported combined video only to {final_path}")
+    return final_path
+
+
 def _decode_depth_frame(frame: np.ndarray, encoding: str, source_dtype: str) -> np.ndarray:
     if encoding == "depth_uint16_hi_lo":
         frame_u16 = frame.astype(np.uint16)
@@ -268,6 +303,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Directory to write exported mp4 files into. Defaults to <h5_dir>/exported_videos",
     )
+    parser.add_argument(
+        "--combined-only",
+        action="store_true",
+        help="Only write combined_2x2.mp4 to the output directory; temporary stream files are removed.",
+    )
     return parser.parse_args()
 
 
@@ -277,22 +317,37 @@ def main() -> None:
     output_dir = (
         args.output_dir.expanduser().resolve()
         if args.output_dir is not None
-        else h5_path.parent / "exported_videos"
+        else (
+            h5_path.parent
+            if args.combined_only
+            else h5_path.parent / "exported_videos"
+        )
     )
 
-    exported = export_videos(h5_path, output_dir)
     with h5py.File(h5_path, "r") as f:
         fps = float(f.attrs.get("video_fps", 10.0))
 
+    rgb_order = [
+        "base_camera_rgb_0.mp4",
+        "base_camera_rgb_1.mp4",
+        "tactile_left_rgb.mp4",
+        "tactile_right_rgb.mp4",
+    ]
+    if args.combined_only:
+        export_combined_only(
+            h5_path,
+            output_dir,
+            fps,
+            rgb_order,
+            "combined_2x2.mp4",
+        )
+        return
+
+    exported = export_videos(h5_path, output_dir)
     export_combined_video(
         output_dir,
         fps,
-        [
-            "base_camera_rgb_0.mp4",
-            "base_camera_rgb_1.mp4",
-            "tactile_left_rgb.mp4",
-            "tactile_right_rgb.mp4",
-        ],
+        rgb_order,
         "combined_2x2.mp4",
     )
 
