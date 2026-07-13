@@ -11,7 +11,7 @@
   - 整个数据集的触觉视频替换成带marker tracking箭头的：python Data_analysis/batch_replace_tactile_videos_with_marker_overlay.py shared/data/bc_data/wipe_board_tactile_crop
 
 # 总体流程
-- 数据从Amir电脑传到onedrive, 再传到这台电脑
+- 遥操数据集从Amir电脑传到onedrive, 再传到这台电脑
 - 检查时间戳一致性：python Data_analysis/check_bc_data_integrity.py shared/data/bc_data/rubiks_cube
 - 裁剪首尾静止部分：python Data_analysis/trim_bc_data_by_eef_motion.py \
   shared/data/bc_data/wipe_board \

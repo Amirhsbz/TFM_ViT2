@@ -20,6 +20,7 @@ What it writes under frames/:
   Requires existing tactile_left_marker_motion and tactile_right_marker_motion.
   contact_marker_motion: max(left_marker_motion, right_marker_motion).
   contact_gate: 0 before contact, 1 after contact.
+  Optional contact_gate_segment_id: non-contact segment ids, -1 during contact.
 
 The default wipe_board gate first subtracts each tactile stream's early
 pre-contact marker-motion baseline, then gates on the max per-sensor delta:
@@ -58,6 +59,11 @@ def parse_args() -> argparse.Namespace:
         "--overwrite",
         action="store_true",
         help="Replace existing contact_marker_motion/contact_gate datasets.",
+    )
+    parser.add_argument(
+        "--write-contact-segments",
+        action="store_true",
+        help="Also write frames/contact_gate_segment_id for multi-stage tactile baselines.",
     )
     parser.add_argument("--contact-on-threshold", type=float, default=0.5)
     parser.add_argument("--contact-off-threshold", type=float, default=0.2)
@@ -121,6 +127,7 @@ def main() -> None:
             overwrite=args.overwrite,
             motion_baseline_mode=args.motion_baseline_mode,
             motion_baseline_num_frames=args.motion_baseline_num_frames,
+            write_contact_segments=args.write_contact_segments,
         )
         reports.append(report)
         print(
@@ -143,6 +150,7 @@ def process_trajectory(
     overwrite: bool,
     motion_baseline_mode: str,
     motion_baseline_num_frames: int,
+    write_contact_segments: bool,
 ) -> dict:
     with h5py.File(path, "r") as f:
         frames = f.get("frames")
@@ -176,19 +184,24 @@ def process_trajectory(
         gate_config=gate_cfg,
         gripper_position=gripper_position,
     )
+    segment_ids = _contact_gate_segment_ids(gate) if write_contact_segments else None
 
     if not dry_run:
         with h5py.File(path, "a") as f:
             frames = f.require_group("frames")
-            for name, values in (
+            datasets = [
                 ("contact_marker_motion", motion),
                 ("contact_gate", gate),
-            ):
+            ]
+            if segment_ids is not None:
+                datasets.append(("contact_gate_segment_id", segment_ids))
+            for name, values in datasets:
                 if name in frames:
                     if not overwrite:
                         raise RuntimeError(f"{path}: frames/{name} already exists; pass --overwrite")
                     del frames[name]
-                frames.create_dataset(name, data=values.astype(np.float32), compression="gzip")
+                dtype = np.int32 if name == "contact_gate_segment_id" else np.float32
+                frames.create_dataset(name, data=values.astype(dtype), compression="gzip")
             f.attrs["contact_gate_config"] = json.dumps(
                 {
                     "marker_motion_source": "existing_frames_tactile_left_right_marker_motion",
@@ -206,16 +219,19 @@ def process_trajectory(
                     "gripper_hold_threshold": gate_cfg.gripper_hold_threshold,
                     "gripper_open_consecutive_frames": gate_cfg.gripper_open_consecutive_frames,
                     "hold_contact_while_gripper_closed": gate_cfg.hold_contact_while_gripper_closed,
+                    "write_contact_segments": bool(write_contact_segments),
                 },
                 sort_keys=True,
             )
 
     contact_indices = np.flatnonzero(gate > 0.5)
+    noncontact_segments = _count_noncontact_segments(gate)
     return {
         "path": str(path),
         "frames": int(frame_count),
         "contact_frames": int(np.count_nonzero(gate > 0.5)),
         "first_contact_frame": int(contact_indices[0]) if len(contact_indices) else -1,
+        "noncontact_segments": int(noncontact_segments),
         "motion_p50": float(np.percentile(motion, 50)) if len(motion) else 0.0,
         "motion_p90": float(np.percentile(motion, 90)) if len(motion) else 0.0,
         "motion_p95": float(np.percentile(motion, 95)) if len(motion) else 0.0,
@@ -253,6 +269,29 @@ def _pad_to_length(values: np.ndarray, length: int) -> np.ndarray:
     out = np.zeros(length, dtype=np.float32)
     out[: len(values)] = values
     return out
+
+
+def _contact_gate_segment_ids(gate: np.ndarray) -> np.ndarray:
+    """Return ids for each gate=0 run and -1 while contact is active."""
+    values = np.asarray(gate, dtype=np.float32).reshape(-1)
+    out = np.full(len(values), -1, dtype=np.int32)
+    segment_id = -1
+    in_noncontact = False
+    for i, value in enumerate(values):
+        if value <= 0.5:
+            if not in_noncontact:
+                segment_id += 1
+                in_noncontact = True
+            out[i] = segment_id
+        else:
+            in_noncontact = False
+    return out
+
+
+def _count_noncontact_segments(gate: np.ndarray) -> int:
+    segment_ids = _contact_gate_segment_ids(gate)
+    valid = segment_ids[segment_ids >= 0]
+    return int(valid.max() + 1) if len(valid) else 0
 
 
 def _contact_motion(
@@ -309,6 +348,7 @@ def _summary(reports: list[dict], args: argparse.Namespace, *, dry_run: bool) ->
             "gripper_hold_threshold": args.gripper_hold_threshold,
             "gripper_open_consecutive_frames": args.gripper_open_consecutive_frames,
             "hold_contact_while_gripper_closed": not args.disable_gripper_hold,
+            "write_contact_segments": args.write_contact_segments,
             "motion_baseline_mode": args.motion_baseline_mode,
             "motion_baseline_num_frames": args.motion_baseline_num_frames,
         },

@@ -10,6 +10,10 @@ Examples:
     shared/data/bc_data/wipe_board \
     --mode black
 
+  conda run -n robodiff python3 Data_analysis/make_contact_gated_tactile_dataset.py \
+    shared/data/bc_data/regrasp_task \
+    --mode segment-baseline
+
 The input H5 files must already contain frames/contact_gate. Frames with
 contact_gate <= 0.5 are replaced in these embedded videos:
   videos/tactile_left_rgb
@@ -18,6 +22,9 @@ contact_gate <= 0.5 are replaced in these embedded videos:
 By default, each tactile stream uses that episode's first pre-contact frames as
 a neutral baseline: median(contact_gate==0 first 20 frames). Pass --mode black to
 write a *_gated_black inspection dataset where contact_gate=0 frames are black.
+Pass --mode segment-baseline for multi-stage tasks: each gate=0 segment uses
+that segment's earliest frames as its own neutral baseline, so after release the
+fixed tactile image can reflect the recently released sensor state.
 The older --mode zero spelling is kept as an alias for --mode black.
 
 All other files, H5 groups, datasets, and attrs are copied unchanged.
@@ -49,8 +56,8 @@ def parse_args() -> argparse.Namespace:
         nargs="?",
         default=None,
         help=(
-            "Output dataset path. Defaults to *_gated_tactile for baseline mode "
-            "and *_gated_black for black mode."
+            "Output dataset path. Defaults to *_gated_tactile for baseline/segment-baseline "
+            "mode and *_gated_black for black mode."
         ),
     )
     parser.add_argument(
@@ -66,10 +73,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mode",
-        choices=["baseline", "black", "zero"],
+        choices=["baseline", "segment-baseline", "black", "zero"],
         default="baseline",
         help=(
             "Replacement for contact_gate=0 frames. Default: per-episode tactile baseline. "
+            "'segment-baseline' computes a separate baseline for each gate=0 segment; "
             "'black' writes all-black frames; 'zero' is a deprecated alias."
         ),
     )
@@ -140,6 +148,7 @@ def main() -> None:
         "baseline_stat": args.baseline_stat,
         "total_replaced_frames": int(sum(r["replaced_frames"] for r in reports)),
         "total_contact_frames": int(sum(r["contact_frames"] for r in reports)),
+        "total_noncontact_segments": int(sum(r["noncontact_segments"] for r in reports)),
         "episodes": reports,
     }
     summary_path = args.summary_json or _default_summary_path(output_root)
@@ -161,7 +170,10 @@ def _normalize_mode(mode: str) -> str:
 
 
 def _default_output_root(input_root: Path, mode: str) -> Path:
-    suffix = "_gated_black" if mode == "black" else "_gated_tactile"
+    if mode == "black":
+        suffix = "_gated_black"
+    else:
+        suffix = "_gated_tactile"
     if input_root.suffix:
         return input_root.with_name(f"{input_root.stem}{suffix}{input_root.suffix}")
     return input_root.with_name(f"{input_root.name}{suffix}")
@@ -179,6 +191,8 @@ def replace_precontact_tactile_videos(
             raise RuntimeError(f"{h5_path}: missing frames/contact_gate")
         gate = np.asarray(f["frames"]["contact_gate"][:], dtype=np.float32).reshape(-1)
         replace_mask = gate <= 0.5
+        segment_ids = _read_or_build_segment_ids(f, gate) if mode == "segment-baseline" else None
+        noncontact_segments = _count_noncontact_segments(replace_mask, segment_ids)
         videos_rewritten = 0
         for key in TACTILE_VIDEO_KEYS:
             if "videos" not in f or key not in f["videos"]:
@@ -190,6 +204,15 @@ def replace_precontact_tactile_videos(
             if n > 0:
                 if mode == "black":
                     replacement = np.zeros_like(frames[0])
+                    frames[:n][replace_mask[:n]] = replacement
+                elif mode == "segment-baseline":
+                    _replace_with_segment_baselines(
+                        frames,
+                        replace_mask,
+                        segment_ids,
+                        num_frames=baseline_num_frames,
+                        stat=baseline_stat,
+                    )
                 else:
                     replacement = _compute_tactile_baseline(
                         frames,
@@ -197,7 +220,7 @@ def replace_precontact_tactile_videos(
                         num_frames=baseline_num_frames,
                         stat=baseline_stat,
                     )
-                frames[:n][replace_mask[:n]] = replacement
+                    frames[:n][replace_mask[:n]] = replacement
             encoded = _encode_video_frames(frames, attrs)
             del f["videos"][key]
             out_ds = f["videos"].create_dataset(key, data=encoded, dtype=np.uint8)
@@ -207,14 +230,91 @@ def replace_precontact_tactile_videos(
         f.attrs["tactile_precontact_replacement"] = mode
         f.attrs["tactile_precontact_baseline_num_frames"] = int(baseline_num_frames)
         f.attrs["tactile_precontact_baseline_stat"] = baseline_stat
+        f.attrs["tactile_precontact_noncontact_segments"] = int(noncontact_segments)
 
     return {
         "path": str(h5_path),
         "frames": int(len(gate)),
         "replaced_frames": int(np.count_nonzero(replace_mask)),
         "contact_frames": int(np.count_nonzero(~replace_mask)),
+        "noncontact_segments": int(noncontact_segments),
         "videos_rewritten": int(videos_rewritten),
     }
+
+
+def _read_or_build_segment_ids(f: h5py.File, gate: np.ndarray) -> np.ndarray:
+    frames = f.get("frames")
+    built = _segment_ids_from_gate(gate)
+    if frames is not None and "contact_gate_segment_id" in frames:
+        values = np.asarray(frames["contact_gate_segment_id"][:], dtype=np.int32).reshape(-1)
+        values = _pad_segment_ids(values, len(gate))
+        if np.any((gate <= 0.5) & (values < 0)):
+            return built
+        return values
+    return built
+
+
+def _pad_segment_ids(values: np.ndarray, length: int) -> np.ndarray:
+    values = np.asarray(values, dtype=np.int32).reshape(-1)
+    if len(values) >= length:
+        return values[:length]
+    out = np.full(length, -1, dtype=np.int32)
+    out[: len(values)] = values
+    return out
+
+
+def _segment_ids_from_gate(gate: np.ndarray) -> np.ndarray:
+    values = np.asarray(gate, dtype=np.float32).reshape(-1)
+    out = np.full(len(values), -1, dtype=np.int32)
+    segment_id = -1
+    in_noncontact = False
+    for i, value in enumerate(values):
+        if value <= 0.5:
+            if not in_noncontact:
+                segment_id += 1
+                in_noncontact = True
+            out[i] = segment_id
+        else:
+            in_noncontact = False
+    return out
+
+
+def _count_noncontact_segments(replace_mask: np.ndarray, segment_ids: np.ndarray | None) -> int:
+    if segment_ids is None:
+        segment_ids = _segment_ids_from_gate((~np.asarray(replace_mask, dtype=bool)).astype(np.float32))
+    valid = np.asarray(segment_ids)[np.asarray(replace_mask, dtype=bool)]
+    valid = valid[valid >= 0]
+    return int(len(np.unique(valid))) if len(valid) else 0
+
+
+def _replace_with_segment_baselines(
+    frames: np.ndarray,
+    replace_mask: np.ndarray,
+    segment_ids: np.ndarray | None,
+    *,
+    num_frames: int,
+    stat: str,
+) -> None:
+    n = min(len(frames), len(replace_mask))
+    if n <= 0:
+        return
+    if segment_ids is None:
+        segment_ids = _segment_ids_from_gate((~np.asarray(replace_mask, dtype=bool)).astype(np.float32))
+    segment_ids = _pad_segment_ids(segment_ids, len(replace_mask))
+    mask = np.asarray(replace_mask[:n], dtype=bool)
+    for segment_id in np.unique(segment_ids[:n][mask]):
+        if segment_id < 0:
+            continue
+        indices = np.flatnonzero(mask & (segment_ids[:n] == segment_id))
+        if len(indices) == 0:
+            continue
+        replacement = _compute_tactile_baseline_from_indices(
+            frames,
+            indices,
+            num_frames=num_frames,
+            stat=stat,
+        )
+        frames[indices] = replacement
 
 
 def _compute_tactile_baseline(
@@ -227,7 +327,24 @@ def _compute_tactile_baseline(
     precontact_indices = np.flatnonzero(replace_mask[: len(frames)])
     if len(precontact_indices) == 0:
         return np.zeros_like(frames[0])
-    indices = precontact_indices[: max(1, int(num_frames))]
+    return _compute_tactile_baseline_from_indices(
+        frames,
+        precontact_indices,
+        num_frames=num_frames,
+        stat=stat,
+    )
+
+
+def _compute_tactile_baseline_from_indices(
+    frames: np.ndarray,
+    indices: np.ndarray,
+    *,
+    num_frames: int,
+    stat: str,
+) -> np.ndarray:
+    if len(indices) == 0:
+        return np.zeros_like(frames[0])
+    indices = indices[: max(1, int(num_frames))]
     samples = frames[indices].astype(np.float32)
     if stat == "first":
         baseline = samples[0]

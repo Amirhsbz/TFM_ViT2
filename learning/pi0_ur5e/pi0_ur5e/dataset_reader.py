@@ -177,7 +177,7 @@ class DatasetReader:
             state = np.concatenate([state, gripper.reshape(len(state), -1)[:, :1]], axis=1)
         raw_action = self._numeric_series(frames, "action")
         action = build_action(raw_action, state, gripper, self.config.action_mode)
-        tactile = self._tactile_from_frames(frames)
+        tactile = self._tactile_from_frames(frames, metadata)
         meta = {
             "task_name": metadata.get("task_name", ""),
             "success": metadata.get("success", None),
@@ -292,14 +292,14 @@ class DatasetReader:
             return tactile_to_features(tactile)
         return tactile
 
-    def _tactile_from_frames(self, frames: list[dict[str, Any]]) -> np.ndarray | None:
+    def _tactile_from_frames(self, frames: list[dict[str, Any]], metadata: dict[str, Any] | None = None) -> np.ndarray | None:
         if not self.config.include_tactile:
             return None
         if self.config.tactile_feature_mode == "image_embedding":
             left = self._stack_or_paths(frames, "tactile_left_rgb")
             right = self._stack_or_paths(frames, "tactile_right_rgb")
             gate = self._numeric_series(frames, "contact_gate")
-            if gate is not None:
+            if gate is not None and not _tactile_video_already_gated(metadata):
                 left = _replace_tactile_precontact_with_baseline(left, gate)
                 right = _replace_tactile_precontact_with_baseline(right, gate)
             tactile = tactile_images_to_embeddings(
@@ -397,6 +397,19 @@ def _to_numpy(value: Any) -> np.ndarray:
     if hasattr(value, "detach"):
         value = value.detach().cpu().numpy()
     return np.asarray(value)
+
+
+def _tactile_video_already_gated(metadata: dict[str, Any] | None) -> bool:
+    if not metadata:
+        return False
+    replacement = metadata.get("tactile_precontact_replacement")
+    if isinstance(replacement, bytes):
+        replacement = replacement.decode("utf-8")
+    if isinstance(replacement, np.generic):
+        replacement = replacement.item()
+    if replacement is None:
+        return False
+    return str(replacement).strip().lower() in {"baseline", "segment-baseline", "black", "zero"}
 
 
 def _replace_tactile_precontact_with_baseline(value: Any, gate: np.ndarray | None) -> Any:
