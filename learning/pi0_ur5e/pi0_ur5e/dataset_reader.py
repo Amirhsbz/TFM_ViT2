@@ -4,6 +4,7 @@ import glob
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -31,8 +32,16 @@ DEFAULT_FIELD_MAP = {
 
 
 class DatasetReader:
-    def __init__(self, root: str | Path, config_path: str | Path | None = None, config: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        root: str | Path,
+        config_path: str | Path | None = None,
+        config: dict[str, Any] | None = None,
+        skip_invalid_episodes: bool = False,
+    ):
         self.root = Path(root)
+        self.skip_invalid_episodes = skip_invalid_episodes
+        self.invalid_episode_errors: list[str] = []
         cfg = load_yaml(config_path)
         if config:
             cfg.update(config)
@@ -55,7 +64,16 @@ class DatasetReader:
         if (self.root / "meta" / "info.json").exists() and (self.root / "episodes").exists():
             return self._read_lerobot_jsonl()
         candidates = self._episode_paths()
-        episodes = [self._read_episode_path(path) for path in candidates]
+        episodes = []
+        for path in candidates:
+            try:
+                episodes.append(self._read_episode_path(path))
+            except Exception as exc:
+                message = f"{path}: failed to read episode: {exc}"
+                if not self.skip_invalid_episodes:
+                    raise RuntimeError(message) from exc
+                self.invalid_episode_errors.append(message)
+                print(f"Skipping invalid episode: {message}", file=sys.stderr, flush=True)
         return [episode for episode in episodes if episode is not None]
 
     def _episode_paths(self) -> list[Path]:

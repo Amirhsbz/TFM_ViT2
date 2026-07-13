@@ -37,6 +37,7 @@ def parse_args():
     parser.add_argument("--include-tactile", default="false")
     parser.add_argument("--tactile-feature-mode", default=None, choices=["none", "low_dim", "image_embedding"])
     parser.add_argument("--tactile-embedding-dim", default=None, type=int)
+    parser.add_argument("--skip-invalid-episodes", default="false")
     parser.add_argument("--repo-id", default="local/pi0_ur5e_cup")
     parser.add_argument("--overwrite", default="false")
     return parser.parse_args()
@@ -52,10 +53,17 @@ def main():
         config["tactile_feature_mode"] = args.tactile_feature_mode
     if args.tactile_embedding_dim is not None:
         config["tactile_embedding_dim"] = args.tactile_embedding_dim
-    reader = DatasetReader(args.input_root, args.config, config=config)
+    reader = DatasetReader(
+        args.input_root,
+        args.config,
+        config=config,
+        skip_invalid_episodes=str(args.skip_invalid_episodes).lower() == "true",
+    )
     episodes = reader.episodes()
     if not episodes:
         raise SystemExit(f"No readable episodes found under {args.input_root}")
+    if reader.invalid_episode_errors:
+        print(f"Skipped {len(reader.invalid_episode_errors)} invalid episode(s).")
     _apply_episode_prompt_cutoff(
         episodes,
         cutoff=args.episode_prompt_cutoff,

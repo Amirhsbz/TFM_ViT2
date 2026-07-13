@@ -1,6 +1,7 @@
 import pickle
 
 import numpy as np
+import pytest
 
 from pi0_ur5e.dataset_reader import DatasetReader
 
@@ -62,3 +63,12 @@ def test_dataset_reader_builds_tactile_image_embeddings(tmp_path):
     assert out.tactile.shape == (2, 64)
     assert out.tactile.dtype == np.float32
     assert np.isfinite(out.tactile).all()
+
+
+def test_dataset_reader_reports_invalid_episode_path(tmp_path):
+    ep = tmp_path / "episode_bad"
+    ep.mkdir()
+    (ep / "trajectory.h5").write_text("not an hdf5 file", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match=r"episode_bad/trajectory\.h5: failed to read episode"):
+        DatasetReader(tmp_path).episodes()

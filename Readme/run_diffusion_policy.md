@@ -1,5 +1,7 @@
 #TODO
-把带marker tracking的测试代码已经写好了，跑的时候加参数，把改的代码同步到amir电脑
+35764680, sbatch -p interruptible_gpu put_bottle_upright_gated_tactile/run_convert_pi0_lerobot_tactile_emb.sh
+
+
 
 # 裁剪触觉图像
 - 鼠标选点，生成角点坐标：python Data_analysis/crop_tactile_h5_videos.py select-config shared/data/bc_data/wipe_board --config-dir sensor_configs/wipe_board --output-size 320x240
@@ -18,7 +20,8 @@
   shared/data/bc_data/wipe_board_trimmed
 - 对裁剪后的数据，检查时间戳一致性：python Data_analysis/check_bc_data_integrity.py shared/data/bc_data/wipe_board_trimmed
 - 导出查看裁剪后的视频（抽样）：python Data_analysis/batch_export_h5_videos.py shared/data/bc_data/wipe_board_trimmed
-- 把shared/data/bc_data/wipe_board_trimmed数据上传到服务器
+- 用filezilla把shared/data/bc_data/wipe_board_trimmed数据上传到服务器
+- 把代码同步到hpc
 - 查看计算资源：
   - cd /scratch/grp/luo/shiyi/project/tele-gsy/scripts
   - ./check_gpu_partition_resources.sh
@@ -29,7 +32,7 @@
   - sbatch -p gpu push_button/run_split_data.sh: 会在data_split文件夹下生成train/test文件夹，里面是指向数据的链接
   - sbatch -p gpu push_button/run_prepare_cache.sh: 每个train/test文件夹都会有一个很大的dat文件，使用默认名称01-False-mem.dat
   - 如果需要tactile图像： sbatch -p gpu push_button/run_prepare_cache_tactile.sh，名称在sh文件中指定
-  - pi0：sbatch -p gpu fold_Tshirt/run_convert_pi0_lerobot.sh
+  - pi0：sbatch -p gpu put_bottle_upright_gated_tactile/run_convert_pi0_lerobot_tactile_emb.sh
 - 运行训练代码（先修改参数，然后把sh文件上传到服务器）：sbatch -p gpu push_button/run_train_dp.sh
 - 运行后马上看一下out和err输出，记录wandb链接，gpu型号，训练用时，失败原因
 - 运行结束后把最后的模型下载下来，压缩，传到网盘：/data/wipe_board_trimmed/ckpts
