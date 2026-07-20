@@ -1,8 +1,18 @@
+import argparse
 import json
 import numpy as np
 from pathlib import Path
 
-root = Path("outputs/turn_cleanser_water_bottle_gated_tactile_lerobot_tactile_emb_two_prompt")
+parser = argparse.ArgumentParser(description="Inspect tactile embedding stored at the end of observation.state.")
+parser.add_argument(
+    "--dataset-root",
+    type=Path,
+    default=Path("outputs/turn_cleanser_water_bottle_gated_tactile_lerobot_tactile_emb_two_prompt"),
+    help="LeRobot dataset root containing conversion_report.json, meta/, and data/.",
+)
+args = parser.parse_args()
+
+root = args.dataset_root
 report = json.loads((root / "conversion_report.json").read_text())
 tactile_shape = report.get("tactile_shape")
 print("tactile_shape from report:", tactile_shape)
