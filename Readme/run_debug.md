@@ -1,5 +1,10 @@
 # 数据校对
 ## 左右夹爪互换
+在dp部署时，增加参数--swap-tactile-lr-for-policy，只会影响策略输入，而不会影响相机显示和marker tracking
+
+在pi0部署时，在client端增加参数--swap-tactile-lr-for-policy，效果相同
+
+在用marker tracking,也就是使用--enable-marker-tracking的情况下也兼容
 
 ## 只在接触时提供触觉信息
 当夹爪正在移动并接近物体的时候，只用视觉信息，而在夹爪与物体发生接触后，再把触觉信息加入进去

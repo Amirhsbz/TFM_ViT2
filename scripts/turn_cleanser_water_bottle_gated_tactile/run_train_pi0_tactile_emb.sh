@@ -2,8 +2,8 @@
 
 #SBATCH --job-name=train_pi0_tactile
 #SBATCH --gres=gpu:1
-#SBATCH --constraint="a100_40g|h200|a100_80g|l40s"
-#SBATCH --exclude=erc-hpc-comp031,erc-hpc-comp035,erc-hpc-comp223
+#SBATCH --constraint="h200|a100_80g"
+#SBATCH --exclude=erc-hpc-comp031,erc-hpc-comp035
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
@@ -14,16 +14,17 @@ set -e
 
 PROJECT_ROOT=/scratch/grp/luo/shiyi/project/tele-gsy
 OPENPI_ROOT=/scratch/grp/luo/shiyi/project/openpi
-DATASET_NAME=put_bottle_upright_gated_tactile
-LEROBOT_REPO_ID=local/pi0_ur5e_put_bottle_upright_gated_tactile_tactile_emb
-EXP_NAME=put_bottle_upright_gated_tactile_pi0_base_tactile_emb_lora
-DEFAULT_PROMPT="Grab the bottle, put it upright on the table and release it"
+DATASET_NAME=turn_cleanser_water_bottle_gated_tactile
+LEROBOT_DATASET_NAME=turn_cleanser_water_bottle_gated_tactile_lerobot_tactile_emb_two_prompt
+LEROBOT_REPO_ID=local/pi0_ur5e_turn_cleanser_water_bottle_gated_tactile_tactile_emb
+EXP_NAME=turn_cleanser_water_bottle_gated_tactile_pi0_base_tactile_emb_two_prompt_lora
+DEFAULT_PROMPT="Pick up the cleanser bottle, tilt it over either the yellow bowl or the blue bowl as if pouring, then place it back in its original position"
 DRY_RUN=false
 WANDB=true
 KEEP_PERIOD=10000
 
-DATASET_ROOT=${PROJECT_ROOT}/outputs/${DATASET_NAME}_lerobot_tactile_emb
-OUTPUT_DIR=${PROJECT_ROOT}/outputs/pi0_${DATASET_NAME}_tactile_emb_lora
+DATASET_ROOT=${PROJECT_ROOT}/outputs/${LEROBOT_DATASET_NAME}
+OUTPUT_DIR=${PROJECT_ROOT}/outputs/pi0_${DATASET_NAME}_tactile_emb_two_prompt_lora
 
 cd "${PROJECT_ROOT}"
 source /users/k25070928/miniconda3/etc/profile.d/conda.sh

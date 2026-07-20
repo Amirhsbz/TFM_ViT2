@@ -2,7 +2,7 @@
 
 #SBATCH --job-name=train_pi0_tactile
 #SBATCH --gres=gpu:1
-#SBATCH --constraint="a100_40g|h200|a100_80g|l40s"
+#SBATCH --constraint="h200|a100_80g"
 #SBATCH --exclude=erc-hpc-comp031,erc-hpc-comp035,erc-hpc-comp223
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
@@ -14,10 +14,10 @@ set -e
 
 PROJECT_ROOT=/scratch/grp/luo/shiyi/project/tele-gsy
 OPENPI_ROOT=/scratch/grp/luo/shiyi/project/openpi
-DATASET_NAME=put_bottle_upright_gated_tactile
-LEROBOT_REPO_ID=local/pi0_ur5e_put_bottle_upright_gated_tactile_tactile_emb
-EXP_NAME=put_bottle_upright_gated_tactile_pi0_base_tactile_emb_lora
-DEFAULT_PROMPT="Grab the bottle, put it upright on the table and release it"
+DATASET_NAME=wipe_board_gated_tactile
+LEROBOT_REPO_ID=local/pi0_ur5e_wipe_board_gated_tactile_tactile_emb
+EXP_NAME=wipe_board_gated_tactile_pi0_base_tactile_emb_lora
+DEFAULT_PROMPT="Grab the sponge, wipe the markers on the white board and put the sponge back"
 DRY_RUN=false
 WANDB=true
 KEEP_PERIOD=10000

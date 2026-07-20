@@ -1,7 +1,13 @@
 #TODO
-35764680, sbatch -p interruptible_gpu put_bottle_upright_gated_tactile/run_convert_pi0_lerobot_tactile_emb.sh
+finished:
+35783785, sbatch -p interruptible_gpu put_bottle_upright_gated_tactile/run_train_pi0_tactile_emb.sh
+35862003, sbatch -p interruptible_gpu turn_cleanser_water_bottle_gated_tactile/run_train_pi0_tactile_emb.sh
+35891936, sbatch -p interruptible_gpu peg_in_hole_gated_tactile_crop/run_train_pi0_tactile_emb.sh
+35891937, sbatch -p interruptible_gpu turn_cleanser_water_bottle_gated_tactile_crop/run_train_pi0_tactile_emb.sh
+35891980, sbatch -p interruptible_gpu peg_in_hole_gated_tactile/run_train_pi0_tactile_emb.sh
 
-
+waiting:
+35902803, sbatch -p interruptible_gpu wipe_board_gated_tactile/run_train_pi0_tactile_emb.sh
 
 # 裁剪触觉图像
 - 鼠标选点，生成角点坐标：python Data_analysis/crop_tactile_h5_videos.py select-config shared/data/bc_data/wipe_board --config-dir sensor_configs/wipe_board --output-size 320x240
@@ -33,7 +39,9 @@
   - sbatch -p gpu push_button/run_prepare_cache.sh: 每个train/test文件夹都会有一个很大的dat文件，使用默认名称01-False-mem.dat
   - 如果需要tactile图像： sbatch -p gpu push_button/run_prepare_cache_tactile.sh，名称在sh文件中指定
   - pi0：sbatch -p gpu put_bottle_upright_gated_tactile/run_convert_pi0_lerobot_tactile_emb.sh
-- 运行训练代码（先修改参数，然后把sh文件上传到服务器）：sbatch -p gpu push_button/run_train_dp.sh
+- 运行训练代码（先修改参数，然后把sh文件上传到服务器）：
+  - dp: sbatch -p gpu push_button/run_train_dp.sh
+  - pi0: sbatch -p interruptible_gpu put_bottle_upright_gated_tactile/run_train_pi0_tactile_emb.sh
 - 运行后马上看一下out和err输出，记录wandb链接，gpu型号，训练用时，失败原因
 - 运行结束后把最后的模型下载下来，压缩，传到网盘：/data/wipe_board_trimmed/ckpts
 - 在机器人上运行测试
@@ -246,7 +254,8 @@ python run_env.py \
   --hz 15 \
   --safe \
   --save-data \
-  --data-dir ./shared/data/bc_data/dp_rollouts
+  --data-dir ./shared/data/bc_data/dp_rollout \
+  --swap-tactile-lr-for-policy(交换左右夹爪)
 
 如果 DP 是用 marker tracking overlay 版触觉视频训练的，例如
 `shared/data/bc_data/put_bottle_upright_tactile_crop` 中的
