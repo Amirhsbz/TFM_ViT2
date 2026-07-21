@@ -100,7 +100,7 @@ def main():
             "PI0_UR5E_CAMERA_PADDING": args.camera_padding_strategy,
             "PI0_UR5E_ASSETS_BASE_DIR": str((args.output_dir / "assets").resolve()),
             "PI0_UR5E_CHECKPOINT_BASE_DIR": str((args.output_dir / "checkpoints").resolve()),
-            "XLA_PYTHON_CLIENT_MEM_FRACTION": env.get("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.9"),
+            "XLA_PYTHON_CLIENT_MEM_FRACTION": env.get("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.75"),
         }
     )
     if args.max_token_len is not None:

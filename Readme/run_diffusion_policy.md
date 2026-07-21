@@ -1,11 +1,4 @@
 #TODO
-finished:
-35783785, sbatch -p interruptible_gpu put_bottle_upright_gated_tactile/run_train_pi0_tactile_emb.sh
-35862003, sbatch -p interruptible_gpu turn_cleanser_water_bottle_gated_tactile/run_train_pi0_tactile_emb.sh
-35891936, sbatch -p interruptible_gpu peg_in_hole_gated_tactile_crop/run_train_pi0_tactile_emb.sh
-35891937, sbatch -p interruptible_gpu turn_cleanser_water_bottle_gated_tactile_crop/run_train_pi0_tactile_emb.sh
-35891980, sbatch -p interruptible_gpu peg_in_hole_gated_tactile/run_train_pi0_tactile_emb.sh
-
 waiting:
 35902803, sbatch -p interruptible_gpu wipe_board_gated_tactile/run_train_pi0_tactile_emb.sh
 

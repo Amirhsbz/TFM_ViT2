@@ -11,8 +11,9 @@ set -e
 
 PROJECT_ROOT=/scratch/grp/luo/shiyi/project/tele-gsy
 OPENPI_ROOT=/scratch/grp/luo/shiyi/project/openpi
-DATASET_NAME=put_bottle_upright
-OUTPUT_NAME=put_bottle_upright_lerobot_tactile_emb
+DATASET_NAME=turn_cleanser_water_bottle_gated_tactile
+OUTPUT_NAME=turn_cleanser_water_bottle_gated_tactile_lerobot_tactile_emb_two_prompt
+
 
 DATASET_ROOT=${PROJECT_ROOT}/outputs/${OUTPUT_NAME}
 ANALYSIS_SCRIPT=${PROJECT_ROOT}/Model_analysis/pi0_embedding_analysis.py
