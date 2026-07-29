@@ -59,6 +59,7 @@ class DiffusionPolicy:
         self.action_horizon = action_horizon
         self.data_stat = None
         self.writer = None
+        self.global_step = 0 # for gradiant norm analysis
         self.without_sampling = without_sampling
         self.binarize_touch = binarize_touch
 
@@ -277,6 +278,10 @@ class DiffusionPolicy:
                         if not eval:
                             # optimize
                             loss.backward()
+                            # log gradient norms for each camera encoder
+                            self._log_camera_gradient_norms(self.camera_indices)   # ← insert here
+                            self.global_step += 1
+                            
                             self.optimizer.step()
                             self.optimizer.zero_grad()
                             # step lr scheduler every batch
@@ -432,6 +437,25 @@ class DiffusionPolicy:
             torch.from_numpy(sample).to(self.device, dtype=torch.float32).unsqueeze(0)
         )
         return sample
+
+    def _log_camera_gradient_norms(self, camera_indices, epoch_idx=None):
+        """Log per-camera gradient norm for the img_encoder ModuleList."""
+        if "img_encoder" not in self.nets:
+            return
+        encoder_list = self.nets["img_encoder"]  # nn.ModuleList, one per camera
+        for i, cam_encoder in enumerate(encoder_list):
+            total_norm = 0.0
+            for p in cam_encoder.parameters():
+                if p.grad is not None:
+                    total_norm += p.grad.data.norm(2).item() ** 2
+            total_norm = total_norm ** 0.5
+
+            # map ModuleList position -> actual physical camera index
+            cam_id = camera_indices[i]
+            tag = f"GradNorm/camera_{cam_id}"
+
+            if self.writer is not None:
+                self.writer.add_scalar(tag, total_norm, self.global_step)
 
     def forward(self, stats, obs_deque, num_diffusion_iters=None):
         self.ema_nets.eval()
