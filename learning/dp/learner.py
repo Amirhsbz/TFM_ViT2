@@ -47,6 +47,7 @@ class DiffusionPolicy:
         use_ddim=False,
         binarize_touch=False,
         policy_dropout_rate=0.0,
+        camera_indices=None
     ):
         for rt in representation_type:
             assert rt in encoders, f"{rt} not in encoders"
@@ -62,6 +63,7 @@ class DiffusionPolicy:
         self.global_step = 0 # for gradiant norm analysis
         self.without_sampling = without_sampling
         self.binarize_touch = binarize_touch
+        self.camera_indices = camera_indices if camera_indices is not None else []
 
         if self.without_sampling:
             bc_actor = SimpleBCModel(

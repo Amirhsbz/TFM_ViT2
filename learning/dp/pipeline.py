@@ -314,6 +314,7 @@ class Agent:
             use_ddim=use_ddim,
             binarize_touch=self.binarize_touch,
             policy_dropout_rate=policy_dropout_rate,
+            camera_indices= self.camera_indices
         )
 
         # Compile the forward function to accelerate deployment inference
