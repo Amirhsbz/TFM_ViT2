@@ -23,7 +23,14 @@ def install_config(openpi_root: Path, patch_path: Path) -> Path:
     else:
         if ANCHOR not in text:
             raise RuntimeError(f"Could not find insertion anchor in {config_path}")
-        text = text.replace(ANCHOR, patch + "\n" + ANCHOR, 1)
+        # Use the LAST occurrence, not the first: the real executable anchor line is always
+        # last (the _CONFIGS uniqueness check, at the very end of the config list), but a
+        # sibling installed patch block (e.g. TELE_GSY_PI0_UR5E_CUP_TACTILE) quotes this same
+        # anchor text inside its own header comment ("Paste this block ... immediately before:
+        # if len(...)"), so a first-occurrence replace can corrupt that block instead of
+        # inserting before the real anchor.
+        anchor_index = text.rindex(ANCHOR)
+        text = text[:anchor_index] + patch + "\n" + text[anchor_index:]
     config_path.write_text(text, encoding="utf-8")
     _patch_compute_norm_stats_import_order(openpi_root)
     return config_path

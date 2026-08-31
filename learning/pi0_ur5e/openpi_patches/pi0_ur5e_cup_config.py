@@ -121,6 +121,15 @@ class TeleGsyUR5eInputs(_transforms.DataTransformFn):
             if isinstance(prompt, bytes):
                 prompt = prompt.decode("utf-8")
             inputs["prompt"] = prompt
+        # Raw single-frame tactile images for the FTP1-style tactile-expert model (see
+        # openpi_patches_pytorch/haptile_tactile_pytorch.py). Placed under their own top-level
+        # keys (not inside "image"/"image_mask") so they never route into the SigLIP vision
+        # tower -- only present when TeleGsyLeRobotUR5eDataConfig.include_tactile_images=True
+        # repacks them in, so this is a no-op for the existing non-tactile pi0_ur5e_cup config.
+        if "tactile_left_rgb" in data:
+            inputs["tactile_left_image"] = _tele_gsy_parse_image(data["tactile_left_rgb"])
+        if "tactile_right_rgb" in data:
+            inputs["tactile_right_image"] = _tele_gsy_parse_image(data["tactile_right_rgb"])
         return inputs
 
 
@@ -140,22 +149,27 @@ class TeleGsyLeRobotUR5eDataConfig(DataConfigFactory):
     action_format: str = "joint_position_gripper"
     camera_padding_strategy: str = "zeros"
     use_delta_actions: bool = True
+    # Repacks observation.images.tactile_left_rgb/tactile_right_rgb (written by the pi0_ur5e
+    # data pipeline's raw_image tactile mode) into TeleGsyUR5eInputs. Defaults to False: the
+    # LeRobot RepackTransform raises KeyError on a missing source column, so this must stay off
+    # for the existing non-tactile pi0_ur5e_cup dataset/config and only be turned on for a
+    # dataset actually converted with --tactile-feature-mode raw_image (e.g. the tactile
+    # TrainConfig in haptile_train_config_patch.py).
+    include_tactile_images: bool = False
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
-        repack_transform = _transforms.Group(
-            inputs=[
-                _transforms.RepackTransform(
-                    {
-                        "base_rgb": "observation.images.base_rgb",
-                        "wrist_rgb": "observation.images.wrist_rgb",
-                        "state": "observation.state",
-                        "actions": "action",
-                        "prompt": "task",
-                    }
-                )
-            ]
-        )
+        repack_structure = {
+            "base_rgb": "observation.images.base_rgb",
+            "wrist_rgb": "observation.images.wrist_rgb",
+            "state": "observation.state",
+            "actions": "action",
+            "prompt": "task",
+        }
+        if self.include_tactile_images:
+            repack_structure["tactile_left_rgb"] = "observation.images.tactile_left_rgb"
+            repack_structure["tactile_right_rgb"] = "observation.images.tactile_right_rgb"
+        repack_transform = _transforms.Group(inputs=[_transforms.RepackTransform(repack_structure)])
         data_transforms = _transforms.Group(
             inputs=[
                 TeleGsyUR5eInputs(
