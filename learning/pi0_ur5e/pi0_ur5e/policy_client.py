@@ -84,6 +84,8 @@ def build_policy_observation(
     wrist_rgb: np.ndarray,
     state: np.ndarray,
     prompt: str | None = None,
+    tactile_left_rgb: np.ndarray | None = None,
+    tactile_right_rgb: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Build the raw observation expected by the pi0_ur5e OpenPI data transform."""
     obs: dict[str, Any] = {
@@ -93,6 +95,10 @@ def build_policy_observation(
     }
     if prompt is not None:
         obs["prompt"] = prompt
+    if tactile_left_rgb is not None:
+        obs["tactile_left_rgb"] = np.asarray(tactile_left_rgb)
+    if tactile_right_rgb is not None:
+        obs["tactile_right_rgb"] = np.asarray(tactile_right_rgb)
     return obs
 
 

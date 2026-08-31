@@ -24,6 +24,8 @@ class Episode:
     action: np.ndarray
     gripper_state: np.ndarray | None = None
     tactile: np.ndarray | None = None
+    tactile_left_rgb: np.ndarray | None = None
+    tactile_right_rgb: np.ndarray | None = None
     language_instruction: str = "pick up the paper cup and place it on the target"
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -37,6 +39,10 @@ class Episode:
             raise ValueError(f"{self.episode_id}: gripper_state length does not match timestamps")
         if self.tactile is not None and len(self.tactile) != length:
             raise ValueError(f"{self.episode_id}: tactile length does not match timestamps")
+        if self.tactile_left_rgb is not None and len(self.tactile_left_rgb) != length:
+            raise ValueError(f"{self.episode_id}: tactile_left_rgb length does not match timestamps")
+        if self.tactile_right_rgb is not None and len(self.tactile_right_rgb) != length:
+            raise ValueError(f"{self.episode_id}: tactile_right_rgb length does not match timestamps")
 
 
 @dataclass

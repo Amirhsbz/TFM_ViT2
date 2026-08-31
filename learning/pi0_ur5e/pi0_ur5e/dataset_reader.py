@@ -174,7 +174,21 @@ class DatasetReader:
         gripper = np.asarray(data["gripper_state"], dtype=np.float32) if "gripper_state" in data else None
         action = build_action(np.asarray(data["action"], dtype=np.float32) if "action" in data else None, state, gripper, self.config.action_mode)
         tactile = self._tactile_from_arrays(data)
-        ep = Episode(path.stem, timestamps, data.get("base_rgb"), data.get("wrist_rgb"), state, action, gripper, tactile, prompt, {"source_path": str(path)})
+        tactile_left_rgb, tactile_right_rgb = self._tactile_raw_from_arrays(data)
+        ep = Episode(
+            path.stem,
+            timestamps,
+            data.get("base_rgb"),
+            data.get("wrist_rgb"),
+            state,
+            action,
+            gripper,
+            tactile,
+            tactile_left_rgb,
+            tactile_right_rgb,
+            prompt,
+            {"source_path": str(path)},
+        )
         ep.validate()
         return ep
 
@@ -196,6 +210,7 @@ class DatasetReader:
         raw_action = self._numeric_series(frames, "action")
         action = build_action(raw_action, state, gripper, self.config.action_mode)
         tactile = self._tactile_from_frames(frames, metadata)
+        tactile_left_rgb, tactile_right_rgb = self._tactile_raw_from_frames(frames)
         meta = {
             "task_name": metadata.get("task_name", ""),
             "success": metadata.get("success", None),
@@ -204,7 +219,20 @@ class DatasetReader:
             "camera_info": {"base_rgb": _shape_or_type(base), "wrist_rgb": _shape_or_type(wrist)},
             "action_type": self.config.action_mode,
         }
-        ep = Episode(episode_id, timestamps, base, wrist, state.astype(np.float32), action.astype(np.float32), gripper, tactile, str(prompt), meta)
+        ep = Episode(
+            episode_id,
+            timestamps,
+            base,
+            wrist,
+            state.astype(np.float32),
+            action.astype(np.float32),
+            gripper,
+            tactile,
+            tactile_left_rgb,
+            tactile_right_rgb,
+            str(prompt),
+            meta,
+        )
         ep.validate()
         return ep
 
@@ -288,7 +316,7 @@ class DatasetReader:
                     keys.add(key)
         if self.config.include_tactile:
             tactile_fields = ["tactile"]
-            if self.config.tactile_feature_mode == "image_embedding":
+            if self.config.tactile_feature_mode in ("image_embedding", "raw_image"):
                 tactile_fields = ["tactile_left_rgb", "tactile_right_rgb"]
             for field in tactile_fields:
                 for key in self.field_map.get(field, []):
@@ -298,6 +326,10 @@ class DatasetReader:
 
     def _tactile_from_arrays(self, data: Any) -> np.ndarray | None:
         if not self.config.include_tactile:
+            return None
+        if self.config.tactile_feature_mode == "raw_image":
+            # Raw tactile pixels are read separately via _tactile_raw_from_arrays;
+            # episode.tactile must stay None so lerobot_writer doesn't re-inflate state.
             return None
         if self.config.tactile_feature_mode == "image_embedding":
             return tactile_images_to_embeddings(
@@ -310,8 +342,26 @@ class DatasetReader:
             return tactile_to_features(tactile)
         return tactile
 
+    def _tactile_raw_from_arrays(self, data: Any) -> tuple[np.ndarray | None, np.ndarray | None]:
+        if not self.config.include_tactile or self.config.tactile_feature_mode != "raw_image":
+            return None, None
+        left = np.asarray(data["tactile_left_rgb"]) if "tactile_left_rgb" in data else None
+        right = np.asarray(data["tactile_right_rgb"]) if "tactile_right_rgb" in data else None
+        return left, right
+
+    def _tactile_raw_from_frames(self, frames: list[dict[str, Any]]) -> tuple[np.ndarray | None, np.ndarray | None]:
+        if not self.config.include_tactile or self.config.tactile_feature_mode != "raw_image":
+            return None, None
+        left = self._stack_or_paths(frames, "tactile_left_rgb")
+        right = self._stack_or_paths(frames, "tactile_right_rgb")
+        return left, right
+
     def _tactile_from_frames(self, frames: list[dict[str, Any]], metadata: dict[str, Any] | None = None) -> np.ndarray | None:
         if not self.config.include_tactile:
+            return None
+        if self.config.tactile_feature_mode == "raw_image":
+            # Raw tactile pixels are read separately via _tactile_raw_from_frames;
+            # episode.tactile must stay None so lerobot_writer doesn't re-inflate state.
             return None
         if self.config.tactile_feature_mode == "image_embedding":
             left = self._stack_or_paths(frames, "tactile_left_rgb")

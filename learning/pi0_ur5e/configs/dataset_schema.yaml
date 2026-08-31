@@ -2,6 +2,9 @@ action_mode: joint_position_gripper
 image_size: [224, 224]
 camera_padding_strategy: duplicate_base
 include_tactile: false
+# tactile_feature_mode: none | low_dim | image_embedding | raw_image
+#   raw_image keeps observation.state at 7-D and instead writes raw tactile
+#   frames as observation.images.tactile_left_rgb / tactile_right_rgb.
 tactile_feature_mode: none
 tactile_embedding_dim: 128
 default_prompt: pick up the paper cup and place it on the target

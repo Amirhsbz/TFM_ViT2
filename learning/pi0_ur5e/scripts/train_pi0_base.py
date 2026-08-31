@@ -33,7 +33,7 @@ def parse_args():
     parser.add_argument("--use-delta-actions", default="true")
     parser.add_argument("--freeze-mode", default="default", choices=["default", "vision_action_head", "action_head"])
     parser.add_argument("--include-tactile", default="false")
-    parser.add_argument("--tactile-feature-mode", default="none", choices=["none", "low_dim", "image_embedding"])
+    parser.add_argument("--tactile-feature-mode", default="none", choices=["none", "low_dim", "image_embedding", "raw_image"])
     parser.add_argument("--tactile-embedding-dim", default=128, type=int)
     parser.add_argument("--action-format", default=None, choices=["ee_delta_6d_gripper", "joint_position_gripper", "joint_delta_gripper"])
     parser.add_argument("--camera-padding-strategy", default="zeros")

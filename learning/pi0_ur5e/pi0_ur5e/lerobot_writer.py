@@ -60,59 +60,93 @@ def write_lerobot_dataset(
     dts = np.concatenate(dt_values, axis=0) if dt_values else np.empty((0,), dtype=np.float64)
     fps = _infer_fps(episodes, dts)
     image_shape = (image_size[1], image_size[0], 3)
+    has_raw_tactile = include_tactile and any(
+        episode.tactile_left_rgb is not None or episode.tactile_right_rgb is not None for episode in episodes
+    )
+
+    features = {
+        "observation.images.base_rgb": {
+            "dtype": "image",
+            "shape": image_shape,
+            "names": ["height", "width", "channel"],
+        },
+        "observation.images.wrist_rgb": {
+            "dtype": "image",
+            "shape": image_shape,
+            "names": ["height", "width", "channel"],
+        },
+        "observation.state": {
+            "dtype": "float32",
+            "shape": (int(states.shape[1]),),
+            "names": ["state"],
+        },
+        "action": {
+            "dtype": "float32",
+            "shape": (int(actions.shape[1]),),
+            "names": ["action"],
+        },
+    }
+    if has_raw_tactile:
+        features["observation.images.tactile_left_rgb"] = {
+            "dtype": "image",
+            "shape": image_shape,
+            "names": ["height", "width", "channel"],
+        }
+        features["observation.images.tactile_right_rgb"] = {
+            "dtype": "image",
+            "shape": image_shape,
+            "names": ["height", "width", "channel"],
+        }
 
     dataset = LeRobotDataset.create(
         repo_id=repo_id,
         root=output,
         fps=fps,
         robot_type="ur5e",
-        features={
-            "observation.images.base_rgb": {
-                "dtype": "image",
-                "shape": image_shape,
-                "names": ["height", "width", "channel"],
-            },
-            "observation.images.wrist_rgb": {
-                "dtype": "image",
-                "shape": image_shape,
-                "names": ["height", "width", "channel"],
-            },
-            "observation.state": {
-                "dtype": "float32",
-                "shape": (int(states.shape[1]),),
-                "names": ["state"],
-            },
-            "action": {
-                "dtype": "float32",
-                "shape": (int(actions.shape[1]),),
-                "names": ["action"],
-            },
-        },
+        features=features,
         use_videos=False,
     )
 
     for episode, state in zip(episodes, states_by_episode, strict=True):
         for t in range(len(episode.timestamps)):
-            dataset.add_frame(
-                {
-                    "observation.images.base_rgb": _image_from_episode(
-                        episode.base_rgb,
-                        t,
-                        image_size,
-                    ),
-                    "observation.images.wrist_rgb": _image_from_episode(
-                        episode.wrist_rgb,
-                        t,
-                        image_size,
-                    ),
-                    "observation.state": state[t].astype(np.float32),
-                    "action": episode.action[t].astype(np.float32),
-                    "task": episode.language_instruction or task_name,
-                }
-            )
+            frame = {
+                "observation.images.base_rgb": _image_from_episode(
+                    episode.base_rgb,
+                    t,
+                    image_size,
+                ),
+                "observation.images.wrist_rgb": _image_from_episode(
+                    episode.wrist_rgb,
+                    t,
+                    image_size,
+                ),
+                "observation.state": state[t].astype(np.float32),
+                "action": episode.action[t].astype(np.float32),
+                "task": episode.language_instruction or task_name,
+            }
+            if has_raw_tactile:
+                frame["observation.images.tactile_left_rgb"] = _image_from_episode(
+                    episode.tactile_left_rgb,
+                    t,
+                    image_size,
+                )
+                frame["observation.images.tactile_right_rgb"] = _image_from_episode(
+                    episode.tactile_right_rgb,
+                    t,
+                    image_size,
+                )
+            dataset.add_frame(frame)
         dataset.save_episode()
     if getattr(dataset, "image_writer", None) is not None:
         dataset.stop_image_writer()
+
+    image_shape_report = {
+        "observation.images.base_rgb": list(image_shape),
+        "observation.images.wrist_rgb": list(image_shape),
+    }
+    if has_raw_tactile:
+        image_shape_report["observation.images.tactile_left_rgb"] = list(image_shape)
+        image_shape_report["observation.images.tactile_right_rgb"] = list(image_shape)
 
     report = {
         "episode_count": len(episodes),
@@ -121,10 +155,7 @@ def write_lerobot_dataset(
         "action": _array_stats(actions),
         "state": _array_stats(states),
         "has_nan_or_inf": bool((not np.isfinite(actions).all()) or (not np.isfinite(states).all())),
-        "image_shape": {
-            "observation.images.base_rgb": list(image_shape),
-            "observation.images.wrist_rgb": list(image_shape),
-        },
+        "image_shape": image_shape_report,
         "tactile_shape": tactile_shape,
         "timestamp_dt": _array_stats(dts),
         "camera_padding_strategy": camera_padding_strategy,

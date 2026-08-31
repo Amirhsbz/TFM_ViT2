@@ -162,6 +162,33 @@ tactile_shape: [N, 128]
 
 If the state is still `[37]` or another low-dimensional value, the dataset was not converted with `--tactile-feature-mode image_embedding`, or the tactile RGB fields were not detected.
 
+## Option C: Convert With Raw Tactile Images
+
+Use this path when tactile pixels should be forwarded to the policy directly (e.g. for the tactile-expert model in `openpi_patches_pytorch/`) instead of being pre-baked into `observation.state`. `observation.state` stays 7-D; raw tactile frames are written as their own LeRobot image keys, `observation.images.tactile_left_rgb` / `observation.images.tactile_right_rgb`.
+
+```bash
+uv run python /path/to/tele-amir/learning/pi0_ur5e/scripts/convert_to_lerobot.py \
+  --input-root /path/to/raw_dataset \
+  --output-root /path/to/tele-amir/outputs/turn_cleanser_bottle_lerobot_tactile_raw \
+  --config /path/to/tele-amir/learning/pi0_ur5e/configs/dataset_schema.yaml \
+  --task-name turn_cleanser_bottle \
+  --repo-id local/pi0_ur5e_turn_cleanser_bottle_tactile_raw \
+  --default-prompt "turn the cleanser bottle" \
+  --action-mode joint_position_gripper \
+  --include-tactile true \
+  --tactile-feature-mode raw_image \
+  --overwrite true
+```
+
+Expected output:
+
+```text
+state shape: [7]
+action shape: [7]
+```
+
+`meta/info.json`'s `features` dict should contain `observation.images.tactile_left_rgb`/`observation.images.tactile_right_rgb` (same shape as `observation.images.base_rgb`). See `docs/tactile_raw_image_pipeline.md` for the full data-flow explanation.
+
 ## Train pi0_base With LoRA
 
 The training helper:
@@ -321,9 +348,10 @@ python run_env.py \
 The deployment state dimension must match the training dataset:
 
 ```text
-no tactile:             pi0_state_dim = 7
-128D tactile embedding: pi0_state_dim = 135
-64D tactile embedding:  pi0_state_dim = 71
+no tactile:              pi0_state_dim = 7
+128D tactile embedding:  pi0_state_dim = 135
+64D tactile embedding:   pi0_state_dim = 71
+raw_image tactile mode:  pi0_state_dim = 7 (tactile shape lives in the dataset's image keys, not state)
 ```
 
 If tactile was used in training but missing during deployment, `Pi0Agent` will pad or encode missing tactile inputs differently from training, and policy behavior will not match the trained distribution.

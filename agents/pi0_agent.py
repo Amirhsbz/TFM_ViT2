@@ -192,6 +192,16 @@ class Pi0Agent:
             print("[pi0] warning: tactile image embedding enabled but tactile_left_rgb/tactile_right_rgb are missing.")
         return self.tactile_encoder.encode_pair(left, right)
 
+    def _tactile_raw_images(self, obs: Dict[str, Any]) -> tuple[np.ndarray | None, np.ndarray | None]:
+        left = self._first_obs_value(obs, ("tactile_left_rgb", "left_tactile_rgb"))
+        right = self._first_obs_value(obs, ("tactile_right_rgb", "right_tactile_rgb"))
+        if left is None and right is None:
+            print("[pi0] warning: tactile_feature_mode=raw_image but tactile_left_rgb/tactile_right_rgb are missing.")
+        return (
+            self._resize_image(left) if left is not None else None,
+            self._resize_image(right) if right is not None else None,
+        )
+
     @staticmethod
     def _first_obs_value(obs: Dict[str, Any], keys: tuple[str, ...]) -> Any | None:
         for key in keys:
@@ -200,11 +210,16 @@ class Pi0Agent:
         return None
 
     def _policy_observation(self, obs: Dict[str, Any]) -> dict[str, Any]:
+        tactile_left_rgb = tactile_right_rgb = None
+        if self.include_tactile and self.tactile_feature_mode == "raw_image":
+            tactile_left_rgb, tactile_right_rgb = self._tactile_raw_images(obs)
         return build_policy_observation(
             base_rgb=self._select_image(obs, "base"),
             wrist_rgb=self._select_image(obs, "wrist"),
             state=self._state(obs),
             prompt=self.prompt,
+            tactile_left_rgb=tactile_left_rgb,
+            tactile_right_rgb=tactile_right_rgb,
         )
 
     def _request_action_chunk(self, policy_obs: dict[str, Any], *, source: str) -> np.ndarray:

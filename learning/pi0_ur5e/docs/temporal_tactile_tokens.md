@@ -1,5 +1,13 @@
 # Temporal tactile tokens for pi0 — implementation notes
 
+> **Superseded (2026-08-31).** This design was never implemented (none of the code below is
+> actually applied to the repo). It's superseded by the FTP1-style tactile-expert port — see
+> `docs/tactile_raw_image_pipeline.md` (data pipeline) and
+> `openpi_patches_pytorch/docs/ftp1_tactile_expert_port.md` (model) — which reuses the same
+> `Episode.tactile_left_rgb`/`tactile_right_rgb` raw-frame fields this doc proposed, but feeds
+> them to a dedicated tactile-expert transformer branch instead of pi0's suffix sequence. Kept
+> here for historical reference only; do not implement against this document.
+
 This document walks through every change made to add a `tactile_feature_mode=temporal_tokens`
 mode: instead of pooling tactile sensor frames into one flat embedding vector that gets
 concatenated onto `observation.state`, a window of raw tactile RGB frames is encoded by a

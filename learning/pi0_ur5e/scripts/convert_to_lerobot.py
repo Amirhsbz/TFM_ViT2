@@ -35,7 +35,7 @@ def parse_args():
     )
     parser.add_argument("--action-mode", default=None, choices=["ee_delta_6d_gripper", "ee_absolute_6d_gripper", "joint_position_gripper", "joint_delta_gripper"])
     parser.add_argument("--include-tactile", default="false")
-    parser.add_argument("--tactile-feature-mode", default=None, choices=["none", "low_dim", "image_embedding"])
+    parser.add_argument("--tactile-feature-mode", default=None, choices=["none", "low_dim", "image_embedding", "raw_image"])
     parser.add_argument("--tactile-embedding-dim", default=None, type=int)
     parser.add_argument("--skip-invalid-episodes", default="false")
     parser.add_argument("--repo-id", default="local/pi0_ur5e_cup")
