@@ -161,6 +161,16 @@ testing with `dummy` before switching to real variants). `model_type` returns
 raising rather than silently returning `None`). `load_pytorch` constructs
 `HaptileTactilePI0Pytorch` instead of the base class's hardcoded `PI0Pytorch`.
 
+**`discrete_state_input: bool = True`** — not read by the model itself; read by
+`ModelTransformFactory`'s PI05 branch (`$OPENPI_ROOT/src/openpi/training/config.py`), which
+decides whether `TokenizePrompt` folds `state` into the tokenized prompt text. Found missing
+during the end-to-end dry run below: `HaptileTactilePI0Pytorch.embed_suffix`, like `PI0Pytorch`'s
+own pi05 branch, never embeds `state` as a continuous suffix token — with this field left at its
+dataclass default of `False`, the model would have been silently blind to robot state the whole
+time, with no error to signal it. The real `pi0_ur5e_cup` config gets `True` via a different
+path (`Pi0Config` resolves it internally whenever `pi05=True`); `HaptileTactileConfig` needed it
+added as an explicit field since it doesn't go through `Pi0Config`.
+
 ## Config-splice edits (`$OPENPI_ROOT/src/openpi/training/config.py`, via installer scripts)
 
 Rather than redefining `TeleGsyUR5eInputs`/`TeleGsyLeRobotUR5eDataConfig` a second time inside a
@@ -252,9 +262,26 @@ shared-rotary-embedding constraint noted above), on CPU:
 - **Data pipeline check** (Part 1, referenced here since it feeds this model): raw pkl → `Episode`
   → LeRobot dataset → reread round trip, confirming `observation.images.tactile_left_rgb`/
   `tactile_right_rgb` present with the expected shape and `observation.state` staying 7-D.
+- **End-to-end training dry run** (a later session, after the checks above): converted a real
+  2-episode/16-frame dataset with Part 1's `raw_image` mode
+  (`local/pi0_ur5e_cup_tactile_dryrun`), ran `scripts/compute_norm_stats.py --config-name
+  pi0_ur5e_cup_tactile` against it, then launched
+  `scripts/train_haptile_tactile_pytorch.py pi0_ur5e_cup_tactile` for real (not a unit test) —
+  config resolution, dataset loading with `include_tactile_images=True`, the full repack →
+  `TeleGsyUR5eInputs` → `TokenizePrompt`(`discrete_state_input=True`) → `HaptileTactilePI0Pytorch`
+  construction (gradient checkpointing enabled) → training loop all assembled and ran with no
+  errors, through the start of the first forward/backward pass (manually stopped there — CPU
+  bf16 compute for a 3.6B-param model is slow, and confirming assembly didn't require completing
+  the step). This is what surfaced the missing `discrete_state_input` field documented above,
+  and confirmed it fixed the issue once added. Two environment-only blockers, unrelated to the
+  tactile code, had to be worked around to get this far: no norm stats existed yet for the
+  dry-run dataset (fixed by the `compute_norm_stats.py` run above), and this machine's GPU
+  (RTX PRO 2000 Blackwell, `sm_120`) isn't supported by the installed PyTorch/JAX builds (only
+  `sm_50`–`sm_90`), which crashes on kernel launch unless both are forced to CPU
+  (`CUDA_VISIBLE_DEVICES=""`, `JAX_PLATFORMS=cpu`).
 
-**Not executed in this session** (would need a GPU and a real multi-episode dataset with actual
-tactile footage, beyond what's practical to fabricate here): an end-to-end multi-step training
-run via `train_haptile_tactile_pytorch.py`, and a serving smoke test through
-`create_trained_policy`/`Policy.infer()`. The model/config/data-loading pieces those depend on
-have each been verified individually above.
+**Still not executed**: a *completed* multi-step training run (checkpoint save/load included) and
+a serving smoke test through `create_trained_policy`/`Policy.infer()` — the dry run above
+confirms the pieces assemble and run, not that loss goes down or that a checkpoint round-trips.
+Both would also need a working GPU (or a lot of patience on CPU) and, for a meaningful loss
+trend, a larger real dataset than the 2-episode smoke-test one used here.
