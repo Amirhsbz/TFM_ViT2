@@ -1,0 +1,115 @@
+#!/bin/bash -l
+
+#SBATCH --job-name=train_pi0_haptile_tactile
+#SBATCH --gres=gpu:1
+#SBATCH --constraint="a100_40g|h200|a100_80g|l40s"
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --time=24:00:00
+#SBATCH --output=CHANGE_ME/script_results/%x_%j.out
+#SBATCH --error=CHANGE_ME/script_results/%x_%j.err
+# CHANGE_ME: add --account/--qos/--exclude directives to match your cluster's current
+# conventions (don't copy run_train_pi0_tactile_emb.sh's --exclude node list blindly -- check
+# whether those nodes are still flaky before reusing it).
+#
+# Part 2 of the new tactile-expert pipeline: trains HaptileTactilePI0Pytorch (learned ViT tactile
+# encoder + dedicated tactile-expert transformer branch + FTP1 KV-cache-reuse inference) on a
+# dataset converted by run_convert_pi0_lerobot_tactile_raw.sh. Unlike the older
+# run_train_pi0_tactile_emb.sh, there's no train_pi0_base.sh-style wrapper for this model yet --
+# this script does by hand what that wrapper automated: installing the config splice, linking the
+# dataset into a local HF_LEROBOT_HOME, computing norm stats, then launching training. See
+# learning/pi0_ur5e/openpi_patches_pytorch/docs/ftp1_tactile_expert_port.md for the full design.
+#
+# Run run_setup_openpi_haptile_env.sh once per fresh $OPENPI_ROOT checkout before the first job
+# that uses this script (installs timm + the transformers_replace patch; without it the model
+# can't even construct).
+#
+# Note on LoRA: unlike run_train_pi0_tactile_emb.sh's --lora flag, LoRA isn't a flag here --
+# paligemma_variant="gemma_2b_lora" and action_expert_variant="gemma_300m_lora" are hardcoded in
+# openpi_patches_pytorch/haptile_train_config_patch.py. Only TACTILE_EXPERT_VARIANT below is
+# env-overridable; to change the other two you'd edit that patch file directly.
+
+set -e
+
+PROJECT_ROOT=CHANGE_ME                # e.g. /scratch/grp/luo/<you>/project/tele-gsy
+OPENPI_ROOT=CHANGE_ME                 # e.g. /scratch/grp/luo/<you>/project/openpi
+DATASET_NAME=CHANGE_ME                # must match run_convert_pi0_lerobot_tactile_raw.sh's DATASET_NAME
+DEFAULT_PROMPT="CHANGE_ME"            # must match run_convert_pi0_lerobot_tactile_raw.sh's DEFAULT_PROMPT
+EXP_NAME=CHANGE_ME                    # e.g. ${DATASET_NAME}_haptile_tactile
+
+LEROBOT_REPO_ID=local/pi0_ur5e_${DATASET_NAME}_tactile_raw
+DATASET_ROOT=${PROJECT_ROOT}/outputs/${DATASET_NAME}_lerobot_tactile_raw
+OUTPUT_DIR=${PROJECT_ROOT}/outputs/pi0_${DATASET_NAME}_haptile_tactile
+
+WANDB=true
+OVERWRITE=true                        # set RESUME=true (and OVERWRITE irrelevant) to resume a crashed run
+RESUME=false
+STEPS=30000
+BATCH_SIZE=16
+TACTILE_EXPERT_VARIANT=gemma_300m     # only field env-overridable here -- see note above
+
+cd "${OPENPI_ROOT}"
+source /users/CHANGE_ME/miniconda3/etc/profile.d/conda.sh   # CHANGE_ME: your conda.sh path
+conda activate tele
+
+echo "================================"
+echo "Job ID: $SLURM_JOB_ID"
+echo "Running on node: $HOSTNAME"
+echo "Current directory: $(pwd)"
+echo "Python path: $(which python)"
+echo "Conda env: $CONDA_DEFAULT_ENV"
+echo "UV path: $(which uv)"
+echo "Dataset root: ${DATASET_ROOT}"
+echo "Output dir: ${OUTPUT_DIR}"
+echo "WandB enabled: ${WANDB}"
+echo "================================"
+
+echo "Checking GPU with nvidia-smi:"
+nvidia-smi
+
+echo "(Re-)installing Haptile's config splice blocks (idempotent, safe if already installed):"
+python "${PROJECT_ROOT}/learning/pi0_ur5e/scripts/install_openpi_config.py" --openpi-root "${OPENPI_ROOT}"
+python "${PROJECT_ROOT}/learning/pi0_ur5e/scripts/install_openpi_pytorch_patch.py" --openpi-root "${OPENPI_ROOT}"
+
+echo "Linking the converted LeRobot dataset into a local HF_LEROBOT_HOME:"
+mkdir -p "${OUTPUT_DIR}/logs"
+LEROBOT_HOME_DIR="${OUTPUT_DIR}/lerobot_home"
+LINK_PATH="${LEROBOT_HOME_DIR}/${LEROBOT_REPO_ID}"
+mkdir -p "$(dirname "${LINK_PATH}")"
+rm -f "${LINK_PATH}"
+ln -s "${DATASET_ROOT}" "${LINK_PATH}"
+export HF_LEROBOT_HOME="${LEROBOT_HOME_DIR}"
+
+export PI0_UR5E_TACTILE_LEROBOT_REPO_ID="${LEROBOT_REPO_ID}"
+export PI0_UR5E_TACTILE_ASSET_ID="${LEROBOT_REPO_ID}"
+export PI0_UR5E_TACTILE_TRAIN_STEPS="${STEPS}"
+export PI0_UR5E_TACTILE_BATCH_SIZE="${BATCH_SIZE}"
+export PI0_UR5E_TACTILE_EXPERT_VARIANT="${TACTILE_EXPERT_VARIANT}"
+export PI0_UR5E_TACTILE_ASSETS_BASE_DIR="${OUTPUT_DIR}/assets"
+export PI0_UR5E_TACTILE_CHECKPOINT_BASE_DIR="${OUTPUT_DIR}/checkpoints"
+export PI0_UR5E_DEFAULT_PROMPT="${DEFAULT_PROMPT}"
+if [[ "${WANDB}" != "true" ]]; then
+  export WANDB_MODE=disabled
+fi
+
+echo "Computing normalization stats (openpi's own compute_norm_stats.py, not the repo-local one --"
+echo "the data loader below only reads stats written by this exact script):"
+uv run python scripts/compute_norm_stats.py --config-name pi0_ur5e_cup_tactile \
+  2>&1 | tee "${OUTPUT_DIR}/logs/compute_norm_stats.log"
+
+TRAIN_CMD=(uv run python "${PROJECT_ROOT}/learning/pi0_ur5e/scripts/train_haptile_tactile_pytorch.py" \
+  pi0_ur5e_cup_tactile --exp_name "${EXP_NAME}")
+if [[ "${RESUME}" == "true" ]]; then
+  TRAIN_CMD+=(--resume)
+elif [[ "${OVERWRITE}" == "true" ]]; then
+  TRAIN_CMD+=(--overwrite)
+fi
+if [[ "${WANDB}" != "true" ]]; then
+  TRAIN_CMD+=(--no-wandb_enabled)
+fi
+
+echo "Launching HaptileTactilePI0Pytorch training:"
+printf '%q ' "${TRAIN_CMD[@]}"; printf '\n'
+"${TRAIN_CMD[@]}" 2>&1 | tee "${OUTPUT_DIR}/logs/train.log"
+
+echo "Job finished."
