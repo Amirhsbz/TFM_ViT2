@@ -192,6 +192,22 @@ Both changes are additive/conditional — confirmed by a direct regression check
 `pi0_ur5e_cup` config still loads and its `TeleGsyLeRobotUR5eDataConfig.include_tactile_images`
 defaults to `False` with no tactile keys appearing in its repack/transform output.
 
+### `ModelTransformFactory` PI05 assert (direct edit, not a splice block)
+
+Separately, `ModelTransformFactory.__call__`'s `PI05` case (same file, but core `openpi` code —
+not part of Haptile's `TELE_GSY_*` blocks) had `assert isinstance(model_config, pi0_config.Pi0Config)`
+before building the transform group. `HaptileTactileConfig` is a sibling `_model.BaseModelConfig`
+subclass, not a `Pi0Config`, so this assert fired unconditionally before the tactile TrainConfig's
+transform pipeline could even be constructed — found by the same end-to-end dry run that found the
+`discrete_state_input` bug above (this one failed first, before `discrete_state_input` was
+reachable at all). Relaxed to accept any `model_config` that exposes `discrete_state_input`, rather
+than narrowing to `Pi0Config` specifically. Not installed by any script in this repo (no existing
+splice block covers arbitrary core-function edits like this one) — applied directly to
+`$OPENPI_ROOT` and committed there in its own git history (`$OPENPI_ROOT` is a git checkout with
+local, unpushed commits — see "Why `$OPENPI_ROOT` isn't a clean checkout" above). If you set up a
+fresh `$OPENPI_ROOT` from scratch (e.g. on a different machine), this edit needs to be re-applied
+by hand unless you carry over that commit.
+
 `haptile_train_config_patch.py`: a second, independent marker-delimited block
 (`# BEGIN/END TELE_GSY_PI0_UR5E_CUP_TACTILE`), appended by `install_openpi_pytorch_patch.py` at
 the same `_CONFIGS` anchor `install_openpi_config.py` uses. Adds `TrainConfig(name=
