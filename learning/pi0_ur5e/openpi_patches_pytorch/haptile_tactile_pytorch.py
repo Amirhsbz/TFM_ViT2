@@ -10,11 +10,10 @@ flow-matching denoising step).
 This class intentionally mirrors openpi.models_pytorch.pi0_pytorch.PI0Pytorch almost line for
 line -- embed_prefix, action_in_proj/action_out_proj, sample_noise/sample_time, gradient
 checkpointing helpers, and the overall forward/sample_actions/denoise_step structure are the
-same. The only real additions are: (a) an always-pi05 embed_suffix (this model always uses
-ModelType.PI05, so the non-pi05 branch of PI0Pytorch.embed_suffix is simply dropped rather than
-carried over unused), (b) embed_tactile, and (c) routing everything through
-FTP1PaliGemmaWithExpertModel's 3-branch attention instead of the 2-branch model, via
-ftp1_attention_masks's block-structured layout builders.
+same. The only real additions are: (a) embed_suffix supports both PI0Pytorch's pi05 and non-pi05
+branches, selected by config.pi05 exactly like PI0Pytorch itself, (b) embed_tactile, and (c)
+routing everything through FTP1PaliGemmaWithExpertModel's 3-branch attention instead of the
+2-branch model, via ftp1_attention_masks's block-structured layout builders.
 
 Authored in the tele-amir repo; installed into $OPENPI_ROOT/src/openpi/models_pytorch/ by
 scripts/install_openpi_pytorch_patch.py.
@@ -47,8 +46,7 @@ class HaptileTactilePI0Pytorch(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        # This model always targets ModelType.PI05 (see HaptileTactileConfig.model_type):
-        # unlike PI0Pytorch, there is no non-pi05 code path here at all.
+        self.pi05 = config.pi05
 
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
@@ -61,7 +59,7 @@ class HaptileTactilePI0Pytorch(nn.Module):
             action_expert_config,
             tactile_expert_config,
             use_tactile_input=config.use_tactile_input,
-            use_adarms=[False, True],
+            use_adarms=[False, True] if self.pi05 else [False, False],
             precision=config.dtype,
         )
 
@@ -71,8 +69,17 @@ class HaptileTactilePI0Pytorch(nn.Module):
 
         self.action_in_proj = nn.Linear(config.action_dim, action_expert_config.width)
         self.action_out_proj = nn.Linear(action_expert_config.width, config.action_dim)
-        self.time_mlp_in = nn.Linear(action_expert_config.width, action_expert_config.width)
-        self.time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
+
+        # Matches PI0Pytorch.__init__ exactly: pi05 uses adaRMS time-conditioning (no separate
+        # state token, no action/time concatenation); non-pi05 embeds state as its own suffix
+        # token and fuses action+time via concatenation through an MLP instead.
+        if self.pi05:
+            self.time_mlp_in = nn.Linear(action_expert_config.width, action_expert_config.width)
+            self.time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
+        else:
+            self.state_proj = nn.Linear(config.action_dim, action_expert_config.width)
+            self.action_time_mlp_in = nn.Linear(2 * action_expert_config.width, action_expert_config.width)
+            self.action_time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
 
         torch.set_float32_matmul_precision("high")
         if config.pytorch_compile_mode is not None:
@@ -198,14 +205,34 @@ class HaptileTactilePI0Pytorch(nn.Module):
         tokens, pad_mask = self._apply_checkpoint(tactile_embed_func, tactile_left, tactile_right)
         return tokens, pad_mask
 
-    def embed_suffix(self, noisy_actions, timestep):
-        """pi05-only version of PI0Pytorch.embed_suffix (the non-pi05 state-token branch is
-        dropped -- this model always runs in pi05 mode, matching PI0Pytorch's own behavior when
-        pi05=True, where the continuous `state` argument is likewise unused in the suffix).
+    def embed_suffix(self, state, noisy_actions, timestep):
+        """Matches PI0Pytorch.embed_suffix exactly, branching on self.pi05 the same way: pi05
+        embeds only action+time (via adaRMS conditioning on the action-expert branch, no separate
+        state token); non-pi05 embeds state as its own leading suffix token and fuses action+time
+        by concatenation through an MLP instead (no adaRMS conditioning, adarms_cond=None).
         """
         embs = []
         pad_masks = []
         att_masks = []
+
+        if not self.pi05:
+            if self.state_proj.weight.dtype == torch.float32:
+                state = state.to(torch.float32)
+
+            def state_proj_func(state):
+                return self.state_proj(state)
+
+            state_emb = self._apply_checkpoint(state_proj_func, state)
+
+            embs.append(state_emb[:, None, :])
+            bsize = state_emb.shape[0]
+            device = state_emb.device
+
+            state_mask = torch.ones(bsize, 1, dtype=torch.bool, device=device)
+            pad_masks.append(state_mask)
+
+            # Set attention masks so that image and language inputs do not attend to state or actions
+            att_masks += [1]
 
         time_emb = create_sinusoidal_pos_embedding(
             timestep, self.action_in_proj.out_features, min_period=4e-3, max_period=4.0, device=timestep.device
@@ -217,15 +244,28 @@ class HaptileTactilePI0Pytorch(nn.Module):
 
         action_emb = self._apply_checkpoint(action_proj_func, noisy_actions)
 
-        def time_mlp_func(time_emb):
-            x = self.time_mlp_in(time_emb)
-            x = F.silu(x)
-            x = self.time_mlp_out(x)
-            return F.silu(x)
+        if not self.pi05:
+            time_emb_expanded = time_emb[:, None, :].expand_as(action_emb)
+            action_time_emb = torch.cat([action_emb, time_emb_expanded], dim=2)
 
-        time_emb = self._apply_checkpoint(time_mlp_func, time_emb)
-        action_time_emb = action_emb
-        adarms_cond = time_emb
+            def mlp_func(action_time_emb):
+                x = self.action_time_mlp_in(action_time_emb)
+                x = F.silu(x)
+                return self.action_time_mlp_out(x)
+
+            action_time_emb = self._apply_checkpoint(mlp_func, action_time_emb)
+            adarms_cond = None
+        else:
+
+            def time_mlp_func(time_emb):
+                x = self.time_mlp_in(time_emb)
+                x = F.silu(x)
+                x = self.time_mlp_out(x)
+                return F.silu(x)
+
+            time_emb = self._apply_checkpoint(time_mlp_func, time_emb)
+            action_time_emb = action_emb
+            adarms_cond = time_emb
 
         embs.append(action_time_emb)
         bsize, action_time_dim = action_time_emb.shape[:2]
@@ -259,7 +299,7 @@ class HaptileTactilePI0Pytorch(nn.Module):
             img_masks,
             lang_tokens,
             lang_masks,
-            _state,
+            state,
             tactile_left,
             tactile_right,
         ) = self._preprocess_observation(observation, train=True)
@@ -274,7 +314,7 @@ class HaptileTactilePI0Pytorch(nn.Module):
         u_t = noise - actions
 
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
-        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(x_t, time)
+        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(state, x_t, time)
 
         use_tactile_branch = self.config.use_tactile_input
         tactile_embs, tactile_pad_masks = self.embed_tactile(tactile_left, tactile_right)
@@ -347,7 +387,7 @@ class HaptileTactilePI0Pytorch(nn.Module):
             actions_shape = (bsize, self.config.action_horizon, self.config.action_dim)
             noise = self.sample_noise(actions_shape, device)
 
-        images, img_masks, lang_tokens, lang_masks, _state, tactile_left, tactile_right = self._preprocess_observation(
+        images, img_masks, lang_tokens, lang_masks, state, tactile_left, tactile_right = self._preprocess_observation(
             observation, train=False
         )
 
@@ -421,6 +461,7 @@ class HaptileTactilePI0Pytorch(nn.Module):
         while time >= -dt / 2:
             expanded_time = time.expand(bsize)
             v_t = self.denoise_step(
+                state,
                 prefix_pad_masks,
                 tactile_pad_masks if use_tactile_branch else None,
                 past_key_values,
@@ -431,10 +472,10 @@ class HaptileTactilePI0Pytorch(nn.Module):
             time += dt
         return x_t
 
-    def denoise_step(self, prefix_pad_masks, tactile_pad_masks, past_key_values, x_t, timestep):
+    def denoise_step(self, state, prefix_pad_masks, tactile_pad_masks, past_key_values, x_t, timestep):
         """Apply one denoising step of the noise `x_t` at a given timestep, reusing the cache
         built once in sample_actions (tactile tokens are never recomputed here)."""
-        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(x_t, timestep)
+        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(state, x_t, timestep)
 
         use_tactile_branch = tactile_pad_masks is not None
         layout = build_action_denoise_layout(

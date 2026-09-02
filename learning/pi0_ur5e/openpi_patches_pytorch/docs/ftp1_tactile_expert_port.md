@@ -113,10 +113,19 @@ checkpoint/architecture shape mismatch until someone deliberately opts in.
 (`embed_prefix`, `action_in_proj`/`action_out_proj`, `sample_noise`/`sample_time`, gradient
 checkpointing helpers are line-for-line the same); the differences:
 
-- **Always pi05.** `HaptileTactileConfig.model_type` is fixed to `PI05`, so `embed_suffix` only
-  implements `PI0Pytorch`'s pi05 branch (the non-pi05 state-token branch is dropped rather than
-  carried over dead — note that even in base `PI0Pytorch`, `state` is unused in `embed_suffix`
-  when `pi05=True`; this is pre-existing behavior, not something introduced here).
+- **pi0 vs pi0.5, selected by `config.pi05`** (default `False`, i.e. plain pi0 — see the `pi05`
+  field's own comment in `haptile_tactile_config.py` for why). `embed_suffix`, `__init__`'s
+  `time_mlp_in`/`time_mlp_out` vs `state_proj`/`action_time_mlp_in`/`action_time_mlp_out`
+  submodule construction, and `use_adarms` all branch on `self.pi05`, matching `PI0Pytorch` line
+  for line: pi05 embeds action+time only, via adaRMS conditioning on the action-expert branch, no
+  separate state token; non-pi05 embeds `state` as its own leading suffix token and fuses
+  action+time by concatenation through an MLP instead (`adarms_cond=None` in that case).
+  `state`/`denoise_step` are threaded through `forward`/`sample_actions` accordingly (previously
+  discarded as `_state` when this model only supported pi05). Originally this model only
+  implemented the pi05 branch, matching the *unset-env-var default* of the existing
+  `pi0_ur5e_cup` config — but that default doesn't reflect how this project actually runs
+  training: every task's `TrainConfig` (T-shirt folding included) passes `--pi05 false`. Fixed to
+  match real usage, with `pi05=False` as this config's own default too.
 - **`embed_tactile(tactile_left, tactile_right)`**: runs `HaptileTactileEncoder` once (checkpointed
   like the other embed_* methods); returns `(None, None)` if tactile is disabled or the frames are
   missing. `forward`/`sample_actions` raise if `config.use_tactile_input=True` but the observation
@@ -156,20 +165,35 @@ rotary embedding**, sized for the VLM's `head_dim`, across all three branches �
 `dummy` (`head_dim=16`) does not, and cannot be used for *any* of the three variants in a working
 config (confirmed by the `RuntimeError: size of tensor... must match... 16... 256` hit while
 testing with `dummy` before switching to real variants). `model_type` returns
-`_model.ModelType.PI05`. `create`/`inputs_spec`/`get_freeze_filter` raise `NotImplementedError`
+`_model.ModelType.PI05` if `self.pi05` else `_model.ModelType.PI0` (see the `pi05` field, below).
+`create`/`inputs_spec`/`get_freeze_filter` raise `NotImplementedError`
 (PyTorch-only model, mirroring `ftp1_model_config.FTP1ModelConfig`'s no-op stub pattern, but
 raising rather than silently returning `None`). `load_pytorch` constructs
 `HaptileTactilePI0Pytorch` instead of the base class's hardcoded `PI0Pytorch`.
 
-**`discrete_state_input: bool = True`** — not read by the model itself; read by
+**`pi05: bool = False`** — mirrors `Pi0Config.pi05`, selecting the pi0 vs pi0.5
+transform/embedding convention (see `haptile_tactile_pytorch.py`'s section above). Defaults to
+`False`: every task's `TrainConfig` in this repo, T-shirt folding included, passes `--pi05 false`
+to `train_pi0_base.sh` — pi0.5 was never this project's actual convention. It was initially
+hardcoded `True` here anyway, justified in code only by "matches the existing `pi0_ur5e_cup`
+config" — true only of that config's *unset-env-var default*, not of any config it has actually
+been run with. `PI0_UR5E_TACTILE_PI05` env var (default `false`) controls it in
+`haptile_train_config_patch.py`, and the `run_train_pi0_haptile_tactile.sh` sbatch script exposes
+it as a plain `PI05=` shell variable (there's no `train_pi0_base.sh`-style flag parser for this
+training path).
+
+**`discrete_state_input: bool | None = None`** — not read by the model itself; read by
 `ModelTransformFactory`'s PI05 branch (`$OPENPI_ROOT/src/openpi/training/config.py`), which
-decides whether `TokenizePrompt` folds `state` into the tokenized prompt text. Found missing
-during the end-to-end dry run below: `HaptileTactilePI0Pytorch.embed_suffix`, like `PI0Pytorch`'s
-own pi05 branch, never embeds `state` as a continuous suffix token — with this field left at its
-dataclass default of `False`, the model would have been silently blind to robot state the whole
-time, with no error to signal it. The real `pi0_ur5e_cup` config gets `True` via a different
-path (`Pi0Config` resolves it internally whenever `pi05=True`); `HaptileTactileConfig` needed it
-added as an explicit field since it doesn't go through `Pi0Config`.
+decides whether `TokenizePrompt` folds `state` into the tokenized prompt text. Resolved from
+`pi05` in `__post_init__` if left unset, exactly like `Pi0Config` does
+(`discrete_state_input = pi05`). Originally hardcoded `True` unconditionally — found missing
+during the end-to-end dry run below, back when this model only supported pi05: with the model
+pi05-only but this field left at its dataclass default of `False`, the model would have been
+silently blind to robot state, with no error to signal it. Now that `embed_suffix` supports both
+branches (see above), `discrete_state_input` must track `pi05` exactly — `True` when pi05 (state
+enters via the tokenized prompt only, `embed_suffix` never embeds it), `False` when non-pi05
+(state enters via `embed_suffix`'s own `state_proj` suffix token instead, so it must *not* also
+be duplicated into the prompt).
 
 ## Config-splice edits (`$OPENPI_ROOT/src/openpi/training/config.py`, via installer scripts)
 
@@ -206,7 +230,17 @@ splice block covers arbitrary core-function edits like this one) — applied dir
 `$OPENPI_ROOT` and committed there in its own git history (`$OPENPI_ROOT` is a git checkout with
 local, unpushed commits — see "Why `$OPENPI_ROOT` isn't a clean checkout" above). If you set up a
 fresh `$OPENPI_ROOT` from scratch (e.g. on a different machine), this edit needs to be re-applied
-by hand unless you carry over that commit.
+by hand unless you carry over that commit. (The `PI0` case of the same `match` statement needed
+no such fix — it never asserted `isinstance(model_config, pi0_config.Pi0Config)` in the first
+place, just reads `model_config.max_token_len`/`action_dim`, so it already worked generically for
+any `BaseModelConfig`. This matters now that `HaptileTactileConfig.pi05` defaults to `False`: the
+`PI0` branch is the one actually exercised by default.)
+
+One automatic side effect worth knowing about, not a bug: `DataConfigFactory.create_base_config`
+sets `use_quantile_norm=model_config.model_type != ModelType.PI0` — so with `pi05=False` (the
+default), norm stats use non-quantile normalization, matching every other task's `pi0_ur5e_cup`
+config (which also defaults non-pi05 in practice); with `pi05=True` it switches to quantile
+normalization instead. This falls out of `model_type` automatically, no separate wiring needed.
 
 `haptile_train_config_patch.py`: a second, independent marker-delimited block
 (`# BEGIN/END TELE_GSY_PI0_UR5E_CUP_TACTILE`), appended by `install_openpi_pytorch_patch.py` at
@@ -295,6 +329,19 @@ shared-rotary-embedding constraint noted above), on CPU:
   (RTX PRO 2000 Blackwell, `sm_120`) isn't supported by the installed PyTorch/JAX builds (only
   `sm_50`–`sm_90`), which crashes on kernel launch unless both are forced to CPU
   (`CUDA_VISIBLE_DEVICES=""`, `JAX_PLATFORMS=cpu`).
+
+- **pi0/pi0.5 switch check** (a later session, after discovering the `pi05=True` default didn't
+  match this project's actual usage): for both `pi05=False` and `pi05=True`, on CPU, with the
+  real installed model — confirmed `HaptileTactileConfig.model_type`/`discrete_state_input`
+  resolve correctly; confirmed the right submodule set gets constructed (`state_proj`/
+  `action_time_mlp_in`/`action_time_mlp_out` for pi0, `time_mlp_in`/`time_mlp_out` for pi0.5, never
+  both); `forward()` returns a finite, correctly-shaped loss for both; `.backward()` reaches
+  `state_proj`/`action_time_mlp_in` for pi0 and `time_mlp_in` for pi0.5 (nonzero gradients, in
+  addition to `tactile_encoder` for both); `sample_actions()` (the inference/denoising path,
+  which needed `state` threaded through `denoise_step` for the new pi0 case) returns a finite,
+  correctly-shaped action chunk for both. pi0.5 was a pure regression check — pre-existing,
+  previously-verified code path, gated by branches that already existed — and came back
+  unaffected.
 
 **Still not executed**: a *completed* multi-step training run (checkpoint save/load included) and
 a serving smoke test through `create_trained_policy`/`Policy.infer()` — the dry run above

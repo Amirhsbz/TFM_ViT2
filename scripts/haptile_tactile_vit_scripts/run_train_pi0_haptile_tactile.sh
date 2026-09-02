@@ -28,6 +28,11 @@
 # paligemma_variant="gemma_2b_lora" and action_expert_variant="gemma_300m_lora" are hardcoded in
 # openpi_patches_pytorch/haptile_train_config_patch.py. Only TACTILE_EXPERT_VARIANT below is
 # env-overridable; to change the other two you'd edit that patch file directly.
+#
+# Note on PI05 below: matches run_train_pi0_tactile_emb.sh's --pi05 flag, just as an env var
+# instead of a bash flag (there's no train_pi0_base.sh-style flag parser for this script).
+# Defaults to false (plain pi0) -- this project's actual convention across every task, T-shirt
+# folding included; pi0.5 is opt-in via PI05=true.
 
 set -e
 
@@ -47,6 +52,7 @@ RESUME=false
 STEPS=30000
 BATCH_SIZE=16
 TACTILE_EXPERT_VARIANT=gemma_300m     # only field env-overridable here -- see note above
+PI05=false                            # plain pi0 (this project's convention); true = pi0.5 -- see note above
 
 cd "${OPENPI_ROOT}"
 source /users/CHANGE_ME/miniconda3/etc/profile.d/conda.sh   # CHANGE_ME: your conda.sh path
@@ -62,6 +68,7 @@ echo "UV path: $(which uv)"
 echo "Dataset root: ${DATASET_ROOT}"
 echo "Output dir: ${OUTPUT_DIR}"
 echo "WandB enabled: ${WANDB}"
+echo "PI05: ${PI05}"
 echo "================================"
 
 echo "Checking GPU with nvidia-smi:"
@@ -85,6 +92,7 @@ export PI0_UR5E_TACTILE_ASSET_ID="${LEROBOT_REPO_ID}"
 export PI0_UR5E_TACTILE_TRAIN_STEPS="${STEPS}"
 export PI0_UR5E_TACTILE_BATCH_SIZE="${BATCH_SIZE}"
 export PI0_UR5E_TACTILE_EXPERT_VARIANT="${TACTILE_EXPERT_VARIANT}"
+export PI0_UR5E_TACTILE_PI05="${PI05}"
 export PI0_UR5E_TACTILE_ASSETS_BASE_DIR="${OUTPUT_DIR}/assets"
 export PI0_UR5E_TACTILE_CHECKPOINT_BASE_DIR="${OUTPUT_DIR}/checkpoints"
 export PI0_UR5E_DEFAULT_PROMPT="${DEFAULT_PROMPT}"

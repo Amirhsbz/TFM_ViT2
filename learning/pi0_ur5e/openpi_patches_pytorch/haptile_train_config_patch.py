@@ -38,6 +38,10 @@ _TELE_GSY_PI0_UR5E_TACTILE_ACTION_ORDER = (
     else ["joint_0", "joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "gripper"]
 )
 _TELE_GSY_PI0_UR5E_TACTILE_USE_TACTILE_INPUT = _tele_gsy_tactile_env_bool("PI0_UR5E_TACTILE_USE_TACTILE_INPUT", True)
+# Defaults False (plain pi0), matching every other task's TrainConfig in this repo -- see
+# HaptileTactileConfig.pi05's own field comment for why. Set PI0_UR5E_TACTILE_PI05=true to opt
+# into pi0.5's discrete-state-in-prompt convention instead.
+_TELE_GSY_PI0_UR5E_TACTILE_PI05 = _tele_gsy_tactile_env_bool("PI0_UR5E_TACTILE_PI05", False)
 _TELE_GSY_PI0_UR5E_TACTILE_MODEL = HaptileTactileConfig(
     paligemma_variant="gemma_2b_lora",
     action_expert_variant="gemma_300m_lora",
@@ -46,6 +50,7 @@ _TELE_GSY_PI0_UR5E_TACTILE_MODEL = HaptileTactileConfig(
     # and gemma_300m(_lora) both have head_dim=256, so this holds; do not swap in "dummy" here.
     tactile_expert_variant=_tele_gsy_os.environ.get("PI0_UR5E_TACTILE_EXPERT_VARIANT", "gemma_300m"),
     use_tactile_input=_TELE_GSY_PI0_UR5E_TACTILE_USE_TACTILE_INPUT,
+    pi05=_TELE_GSY_PI0_UR5E_TACTILE_PI05,
     action_dim=7,
     action_horizon=_tele_gsy_tactile_env_int("PI0_UR5E_TACTILE_ACTION_HORIZON", 50),
     max_token_len=_tele_gsy_tactile_env_int("PI0_UR5E_TACTILE_MAX_TOKEN_LEN"),
@@ -92,6 +97,7 @@ _CONFIGS.append(
             "gripper_is_delta": False,
             "camera_padding_strategy": _tele_gsy_os.environ.get("PI0_UR5E_TACTILE_CAMERA_PADDING", "zeros"),
             "use_tactile_input": _TELE_GSY_PI0_UR5E_TACTILE_USE_TACTILE_INPUT,
+            "pi05": _TELE_GSY_PI0_UR5E_TACTILE_PI05,
         },
     )
 )

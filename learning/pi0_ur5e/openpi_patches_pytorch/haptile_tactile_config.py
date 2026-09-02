@@ -28,31 +28,42 @@ class HaptileTactileConfig(_model.BaseModelConfig):
     tactile_expert_variant: _gemma.Variant = "gemma_300m"
     use_tactile_input: bool = True
 
+    # Selects the pi0 vs pi0.5 transform/embedding convention, mirroring Pi0Config.pi05.
+    # Defaults to False (plain pi0): every other task's TrainConfig in this repo (fold_Tshirt
+    # included) passes --pi05 false to train_pi0_base.sh -- pi0.5 was never this project's actual
+    # convention, only the unset-env-var default of the *unrelated* plain pi0_ur5e_cup config
+    # (which this field used to be copied from without checking real usage). Set True to use
+    # pi0.5's discrete-state-in-prompt convention instead.
+    pi05: bool = False
+
     # Set the model specific defaults (mirrors Pi0Config).
     action_dim: int = 7
     action_horizon: int = 50
     max_token_len: int | None = None
     pytorch_compile_mode: str | None = None
     # Not used directly by the model -- read by ModelTransformFactory (see model_type below).
-    # Must be True: HaptileTactilePI0Pytorch.embed_suffix (like PI0Pytorch's own pi05 branch)
-    # never embeds `state` as a continuous suffix token -- state only reaches the model at all
-    # via TokenizePrompt discretizing it into the tokenized prompt text when this is True. With
-    # this False, the model would be entirely blind to robot state (found via a genuine dry run:
-    # ModelTransformFactory's PI05 branch reads this field, and the real pi0_ur5e_cup config
-    # relies on the same mechanism -- Pi0Config resolves it to True whenever pi05=True).
-    discrete_state_input: bool = True
+    # Resolved from `pi05` in __post_init__ if left unset, exactly like Pi0Config does. Only
+    # meaningful when pi05=True: HaptileTactilePI0Pytorch.embed_suffix (like PI0Pytorch's own
+    # pi05 branch) never embeds `state` as a continuous suffix token when pi05=True -- state only
+    # reaches the model via TokenizePrompt discretizing it into the tokenized prompt text in that
+    # case. When pi05=False, embed_suffix embeds `state` directly as a continuous suffix token
+    # instead (PI0Pytorch's non-pi05 branch), so discrete_state_input must be False there too.
+    discrete_state_input: bool | None = None
 
     def __post_init__(self):
         if self.max_token_len is None:
-            object.__setattr__(self, "max_token_len", 200)
+            object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
+        if self.discrete_state_input is None:
+            object.__setattr__(self, "discrete_state_input", self.pi05)
 
     @property
     def model_type(self) -> _model.ModelType:
-        # Reuses PI05: same transform branch (3-camera pi0.5-style prefix, discretized state
-        # folded into the tokenized prompt rather than a continuous suffix token) as the
-        # existing pi0_ur5e_cup config; tactile is an additive branch on top, not a new
-        # transform family.
-        return _model.ModelType.PI05
+        # PI05 when pi05=True: 3-camera pi0.5-style prefix, discretized state folded into the
+        # tokenized prompt rather than a continuous suffix token. PI0 when pi05=False (the
+        # default, matching this project's actual convention -- see the `pi05` field comment):
+        # plain pi0-style prefix, state embedded as its own continuous suffix token instead.
+        # Either way, tactile is an additive branch on top, not a new transform family.
+        return _model.ModelType.PI05 if self.pi05 else _model.ModelType.PI0
 
     # This config only supports PyTorch training/inference (like FTP1ModelConfig) -- the JAX
     # abstract methods on BaseModelConfig are stubbed out rather than implemented.
