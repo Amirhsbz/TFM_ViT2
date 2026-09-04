@@ -34,8 +34,15 @@ T3_PRETRAINED_SENSOR_NAME_MAP = {
     "DenseTact2": "densetact",
 }
 
+
+# "t3_large" is NOT the right size class despite the name suggesting it should match "T3-large" --
+# verified by downloading and inspecting actual checkpoint tensor shapes: t3_large is
+# embed_dim=1024/depth=6, which doesn't match this encoder's embed_dim=768/depth=3 at all (a
+# hard shape-mismatch RuntimeError on load, not a silent issue). Checked all four published size
+# classes (t3_tiny=192/3, t3_small=384/3, t3_medium=768/3, t3_large=1024/6) directly against
+# downloaded checkpoints -- t3_medium is the one that actually matches this encoder's dimensions.
 T3_PRETRAINED_TACTILE_ENCODER_CHECKPOINTS_BASE_URL = (
-    "https://huggingface.co/datasets/alanz-mit/FoundationTactile/resolve/main/models/t3_large/encoders/"
+    "https://huggingface.co/datasets/alanz-mit/FoundationTactile/resolve/main/models/t3_medium/encoders/"
 )
 
 # Side tags for the learned left/right identity embedding.

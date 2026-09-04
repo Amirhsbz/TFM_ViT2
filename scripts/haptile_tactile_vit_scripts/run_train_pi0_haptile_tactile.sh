@@ -53,6 +53,10 @@ STEPS=30000
 BATCH_SIZE=16
 TACTILE_EXPERT_VARIANT=gemma_300m     # only field env-overridable here -- see note above
 PI05=false                            # plain pi0 (this project's convention); true = pi0.5 -- see note above
+LOAD_T3_CHECKPOINT=true               # fine-tune the tactile ViT encoder from a pretrained T3
+                                       # checkpoint rather than random init -- verified working
+T3_SENSOR_NAME=gs_tag                 # marker/dot-pattern GelSight gel -- must match your actual
+                                       # sensor hardware, not just the "GelSight" brand name
 
 cd "${OPENPI_ROOT}"
 source /users/CHANGE_ME/miniconda3/etc/profile.d/conda.sh   # CHANGE_ME: your conda.sh path
@@ -93,6 +97,9 @@ export PI0_UR5E_TACTILE_TRAIN_STEPS="${STEPS}"
 export PI0_UR5E_TACTILE_BATCH_SIZE="${BATCH_SIZE}"
 export PI0_UR5E_TACTILE_EXPERT_VARIANT="${TACTILE_EXPERT_VARIANT}"
 export PI0_UR5E_TACTILE_PI05="${PI05}"
+export PI0_UR5E_TACTILE_LOAD_T3_CHECKPOINT="${LOAD_T3_CHECKPOINT}"
+export PI0_UR5E_TACTILE_T3_SENSOR_NAME="${T3_SENSOR_NAME}"
+export PI0_UR5E_TACTILE_T3_CACHE_DIR="${OUTPUT_DIR}/t3_cache"
 export PI0_UR5E_TACTILE_ASSETS_BASE_DIR="${OUTPUT_DIR}/assets"
 export PI0_UR5E_TACTILE_CHECKPOINT_BASE_DIR="${OUTPUT_DIR}/checkpoints"
 export PI0_UR5E_DEFAULT_PROMPT="${DEFAULT_PROMPT}"

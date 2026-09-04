@@ -28,6 +28,21 @@ class HaptileTactileConfig(_model.BaseModelConfig):
     tactile_expert_variant: _gemma.Variant = "gemma_300m"
     use_tactile_input: bool = True
 
+    # Whether the tactile ViT encoder should initialize from a pretrained T3 checkpoint
+    # (downloaded from HuggingFace, see haptile_tactile_encoder.py's
+    # T3_PRETRAINED_TACTILE_ENCODER_CHECKPOINTS_BASE_URL) rather than random weights, then
+    # fine-tune from there. t3_sensor_name selects which sensor-specific checkpoint to load --
+    # must match the physical tactile sensor, not just the "GelSight" brand: "gs_tag" is the
+    # marker/dot-pattern gel variant (tracks shear/slip via marker displacement), "gs_black" is
+    # the plain/markerless black-gel variant (photometric-stereo surface reconstruction, no
+    # markers) -- confirmed against the actual hardware (visible dots/markers on the gel pad) to
+    # be "gs_tag". Defaults True: verified end-to-end (download + strict load + forward pass) --
+    # see haptile_tactile_encoder.py's T3_PRETRAINED_TACTILE_ENCODER_CHECKPOINTS_BASE_URL comment
+    # for the size-class bug (t3_large, not t3_medium) that had to be fixed first.
+    load_t3_tactile_checkpoint: bool = True
+    t3_sensor_name: str = "gs_tag"
+    t3_checkpoint_cache_dir: str | None = None
+
     # Selects the pi0 vs pi0.5 transform/embedding convention, mirroring Pi0Config.pi05.
     # Defaults to False (plain pi0): every other task's TrainConfig in this repo (fold_Tshirt
     # included) passes --pi05 false to train_pi0_base.sh -- pi0.5 was never this project's actual

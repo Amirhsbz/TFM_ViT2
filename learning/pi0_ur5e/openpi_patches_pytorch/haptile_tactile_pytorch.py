@@ -64,7 +64,14 @@ class HaptileTactilePI0Pytorch(nn.Module):
         )
 
         self.tactile_encoder = (
-            HaptileTactileEncoder(token_dim=tactile_expert_config.width) if config.use_tactile_input else None
+            HaptileTactileEncoder(
+                token_dim=tactile_expert_config.width,
+                sensor_name=config.t3_sensor_name,
+                load_t3_pretrained_checkpoint=config.load_t3_tactile_checkpoint,
+                cache_t3_pretrained_checkpoint_dir=config.t3_checkpoint_cache_dir,
+            )
+            if config.use_tactile_input
+            else None
         )
 
         self.action_in_proj = nn.Linear(config.action_dim, action_expert_config.width)

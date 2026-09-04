@@ -92,20 +92,42 @@ See `_vendor/README.md` for exact provenance. Installed into
 ### `haptile_tactile_encoder.py` — the (a) encoder
 
 `HaptileTactileEncoder(nn.Module)`: one shared `ViTEncoder` (weights tied across both cameras,
-called twice), `encoder_depth=3` (FTP1's Stage-1 default, for T3-checkpoint compatibility),
-`embed_dim=768`/`num_heads=12`/`mlp_ratio=4` (T3-large defaults, from `ftp1_blocks.py`'s
-`ImageEncoderConfig`), `patch_size=16`/`image_size=224` (matches the 224×224 tactile frames Part
-1's `lerobot_writer.py` writes). Takes the CLS token (index 0), projects via
-`LayerNorm → Linear → GELU → Linear` (FTP1's `unified_proj` pattern, reference only — not
-imported), adds a learned `nn.Embedding(2, token_dim)` left/right tag. `_to_channels_first`
-defensively normalizes either `(B,H,W,C)` or `(B,C,H,W)` input, since `Observation`'s tactile
-image layout depends on how it was constructed (see the `from_dict` note above) — this mirrors
-the same `is_channels_first` detection pattern `preprocessing_pytorch.py` already uses for the
-main camera images. Also hosts the two relocated T3-checkpoint constants.
+called twice), `encoder_depth=3`, `embed_dim=768`/`num_heads=12`/`mlp_ratio=4`,
+`patch_size=16`/`image_size=224` (matches the 224×224 tactile frames Part 1's `lerobot_writer.py`
+writes) — these dimensions were originally labeled "T3-large defaults" in this file's comments;
+that label was wrong (see below) but the dimensions themselves are correct, now confirmed against
+a real downloaded checkpoint rather than an assumed label. Takes the CLS token (index 0), projects
+via `LayerNorm → Linear → GELU → Linear`, adds a learned `nn.Embedding(2, token_dim)` left/right
+tag. `_to_channels_first` defensively normalizes either `(B,H,W,C)` or `(B,C,H,W)` input, since
+`Observation`'s tactile image layout depends on how it was constructed (see the `from_dict` note
+above) — this mirrors the same `is_channels_first` detection pattern `preprocessing_pytorch.py`
+already uses for the main camera images. Also hosts the two relocated T3-checkpoint constants.
 
-`load_t3_pretrained_checkpoint` defaults to `False` — loading a real T3 checkpoint (trained at a
-specific resolution/patch size) is an available option but not exercised by default, to avoid a
-checkpoint/architecture shape mismatch until someone deliberately opts in.
+`load_t3_tactile_checkpoint: bool = True` (on `HaptileTactileConfig`, threaded through to
+`HaptileTactileEncoder`'s `load_t3_pretrained_checkpoint`/`sensor_name`/
+`cache_t3_pretrained_checkpoint_dir` kwargs) — fine-tunes the tactile ViT encoder from a
+pretrained T3 checkpoint instead of random init. Two real bugs found and fixed getting this
+working, verified end-to-end (download + `load_state_dict` + forward pass, on the real sensor
+config):
+
+- **Wrong size class.** `T3_PRETRAINED_TACTILE_ENCODER_CHECKPOINTS_BASE_URL` pointed at
+  `t3_large`, which is `embed_dim=1024`/`depth=6` — nothing close to this encoder's
+  `embed_dim=768`/`depth=3`, and `ViTEncoder.load()`'s `self.load_state_dict(checkpoint)` is
+  strict, so this failed immediately with `size mismatch` errors on every block, not silently.
+  Downloaded and inspected tensor shapes for all four published size classes directly
+  (`t3_tiny`=192/3, `t3_small`=384/3, `t3_medium`=768/3, `t3_large`=1024/6) — `t3_medium` is the
+  one that actually matches. Fixed by pointing the base URL at `t3_medium` instead.
+- **Sensor variant.** `sensor_name` (default `"gs_tag"`, unchanged) selects which of several
+  released sensor-specific checkpoints to load — this needs to match the physical sensor, not
+  just "GelSight" as a brand: `gs_tag` is the marker/dot-pattern gel (shear/slip tracked via
+  marker displacement), `gs_black` is the plain/markerless black-gel variant (photometric-stereo
+  surface reconstruction). Confirmed against the actual hardware (visible dots/markers on the gel
+  pad) that `gs_tag` is correct — this wasn't independently verified before, just inherited as
+  whatever the default happened to be.
+
+`sensor_name`/checkpoint provenance: `https://huggingface.co/datasets/alanz-mit/FoundationTactile`
+— a third-party dataset repo, not a Physical Intelligence asset; its continued availability isn't
+under this project's control.
 
 ### `haptile_tactile_pytorch.py` — the (b)+(c) model
 
@@ -342,6 +364,16 @@ shared-rotary-embedding constraint noted above), on CPU:
   correctly-shaped action chunk for both. pi0.5 was a pure regression check — pre-existing,
   previously-verified code path, gated by branches that already existed — and came back
   unaffected.
+- **T3 pretrained tactile-encoder load check**: isolated `HaptileTactileEncoder` construction
+  with `load_t3_pretrained_checkpoint=True, sensor_name="gs_tag"` — real download from the
+  HuggingFace dataset repo, `load_state_dict` (strict, no `strict=False`) succeeds with no key or
+  shape errors, loaded weight statistics are non-degenerate (`std≈0.024`, not zero/default-init),
+  and a forward pass on dummy tactile images returns a finite, correctly-shaped `(B, 2, token_dim)`
+  output. Repeated through the full `HaptileTactileConfig` → `HaptileTactilePI0Pytorch`
+  construction path (not just the isolated encoder) with identical weight statistics, confirming
+  the config fields actually reach the encoder. This is what caught the `t3_large`-vs-`t3_medium`
+  size-class bug documented above — the first attempt failed with `RuntimeError: size mismatch`
+  on every block before the base URL was fixed.
 
 **Still not executed**: a *completed* multi-step training run (checkpoint save/load included) and
 a serving smoke test through `create_trained_policy`/`Policy.infer()` — the dry run above
