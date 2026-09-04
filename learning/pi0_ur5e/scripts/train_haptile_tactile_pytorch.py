@@ -425,15 +425,28 @@ def train_loop(config: _config.TrainConfig):
             static_graph=world_size >= 8,  # Enable for 8+ GPUs
         )
 
-    # Load weights from weight_loader if specified (for fine-tuning)
+    # Load weights from weight_loader if specified (for fine-tuning). Partial/tolerant, not
+    # strict: config.pytorch_weight_path points at a plain PI0Pytorch-shaped checkpoint (no
+    # tactile branch at all), so a strict load would refuse to load anything the moment it hit
+    # the tactile expert's missing keys. See load_partial_pretrained_weights's own docstring.
+    #
+    # LoRA is applied *only* when pretrained weights were actually loaded here, deliberately not
+    # unconditionally off the config's variant names alone: freezing a randomly-initialized
+    # backbone (no pretrained_weight_path) and leaving only tiny LoRA adapters trainable would
+    # badly undertrain the model -- LoRA only makes sense adapting a pretrained backbone, not
+    # replacing full training of one that's starting from scratch anyway.
     if config.pytorch_weight_path is not None:
         logging.info(f"Loading weights from: {config.pytorch_weight_path}")
 
         model_path = os.path.join(config.pytorch_weight_path, "model.safetensors")
-        safetensors.torch.load_model(
-            (model.module if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model), model_path
-        )
+        lora_model = model.module if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model
+        openpi.models_pytorch.haptile_tactile_pytorch.load_partial_pretrained_weights(lora_model, model_path)
         logging.info(f"Loaded PyTorch weights from {config.pytorch_weight_path}")
+
+        # Apply LoRA to the VLM/action-expert backbone, if the config's variant names ask for it --
+        # must happen after the pretrained-weight load above, never before (see
+        # apply_lora_to_backbone's own docstring for why the order matters).
+        lora_model.apply_lora_to_backbone()
 
     # Optimizer + learning rate schedule from config
     warmup_steps = config.lr_schedule.warmup_steps

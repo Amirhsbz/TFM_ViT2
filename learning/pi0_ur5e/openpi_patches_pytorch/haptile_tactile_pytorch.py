@@ -41,6 +41,63 @@ from openpi.models_pytorch.pi0_pytorch import create_sinusoidal_pos_embedding
 from openpi.models_pytorch.pi0_pytorch import sample_beta
 import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
 
+# q_proj/k_proj/v_proj/o_proj (attention) + gate_proj/up_proj/down_proj (MLP): standard HF
+# Gemma module names, confirmed against the installed (transformers_replace-patched)
+# modeling_gemma.py -- what peft.LoraConfig(target_modules=...) needs to match by suffix.
+_LORA_TARGET_MODULES = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
+
+
+def load_partial_pretrained_weights(model: nn.Module, weight_path: str) -> dict:
+    """Loads a safetensors checkpoint into `model`, keeping only tensors that match both name
+    and shape; anything else is left at its current (randomly initialized) value instead of
+    raising.
+
+    Unlike `safetensors.torch.load_model`'s `strict=True` default -- which refuses to load
+    *anything* the moment a single key is missing or unexpected -- this is what actually lets a
+    plain PI0Pytorch-shaped pretrained checkpoint (no tactile branch at all) populate the VLM and
+    action-expert weights of a HaptileTactilePI0Pytorch, leaving the tactile expert and tactile
+    encoder at their own (separately initialized, see HaptileTactileConfig.load_t3_tactile_checkpoint
+    for the tactile encoder's own pretrained path) initial values.
+    """
+    import safetensors.torch
+
+    checkpoint_state_dict = safetensors.torch.load_file(weight_path)
+    model_state_dict = model.state_dict()
+
+    matched = {}
+    shape_mismatch = []
+    for key, tensor in checkpoint_state_dict.items():
+        if key not in model_state_dict:
+            continue
+        if model_state_dict[key].shape != tensor.shape:
+            shape_mismatch.append(key)
+            continue
+        matched[key] = tensor
+
+    missing = sorted(set(model_state_dict) - set(matched))
+    unexpected = sorted(set(checkpoint_state_dict) - set(matched) - set(shape_mismatch))
+
+    model.load_state_dict(matched, strict=False)
+
+    stats = {
+        "matched": len(matched),
+        "missing_from_checkpoint": missing,
+        "unexpected_in_checkpoint": len(unexpected),
+        "shape_mismatch": shape_mismatch,
+    }
+    logging.info(
+        "Partial pretrained weight load from %s: matched=%d missing_from_checkpoint=%d "
+        "unexpected_in_checkpoint=%d shape_mismatch=%d",
+        weight_path,
+        stats["matched"],
+        len(missing),
+        stats["unexpected_in_checkpoint"],
+        len(shape_mismatch),
+    )
+    if shape_mismatch:
+        logging.warning("Shape-mismatched keys skipped (not loaded): %s", shape_mismatch)
+    return stats
+
 
 class HaptileTactilePI0Pytorch(nn.Module):
     def __init__(self, config):
@@ -130,6 +187,67 @@ class HaptileTactilePI0Pytorch(nn.Module):
 
     def is_gradient_checkpointing_enabled(self):
         return self.gradient_checkpointing_enabled
+
+    def apply_lora_to_backbone(self):
+        """Freezes the VLM/action-expert backbone and injects trainable LoRA adapters, reusing
+        the same "lora" substring convention config.paligemma_variant/action_expert_variant
+        already used on the JAX side (Pi0Config.get_freeze_filter) -- rank/alpha come from the
+        same _gemma.get_config(variant).lora_configs values that convention was always backed by,
+        not new hardcoded numbers. The PyTorch backend never had any LoRA implementation before
+        this (openpi-wide gap, not specific to this model), so this is a real functional addition,
+        not wiring up something that silently already worked.
+
+        MUST be called after any pretrained-weight loading (load_partial_pretrained_weights), not
+        before: peft renames wrapped Linear layers (e.g. `q_proj.weight` ->
+        `q_proj.base_layer.weight`), so loading a plain pretrained checkpoint into an
+        already-LoRA-wrapped model would fail to match almost every key.
+
+        Only the two Gemma decoders get touched. The vision tower is deliberately left alone,
+        matching Pi0Config.get_freeze_filter's own precedent (its freeze filter only ever matches
+        `.*llm.*` paths -- the vision tower was never frozen or LoRA'd, JAX or PyTorch). The
+        tactile expert and tactile encoder are new, trained fully regardless -- there's no
+        pretrained tactile-expert checkpoint to adapt against in the first place.
+
+        Note for anyone debugging a training run that looks like it has "no gradient" for LoRA
+        right after this: peft zero-initializes lora_B by design (so the adapter is a no-op at
+        init, exactly preserving the loaded pretrained backbone's behavior before any adapter
+        training happens). Because lora_B's Jacobian is exactly zero at that point, lora_A's
+        gradient is *mathematically* exactly zero on the very first backward pass -- that's
+        correct LoRA behavior, not a bug (confirmed directly: gradient is present, magnitude
+        legitimately 0.0, and becomes nonzero from the second backward pass onward, once one
+        optimizer step has moved lora_B away from zero).
+        """
+        import peft
+
+        paligemma_config = _gemma.get_config(self.config.paligemma_variant)
+        if paligemma_config.lora_configs:
+            lora_cfg = paligemma_config.lora_configs["attn"]
+            peft.inject_adapter_in_model(
+                peft.LoraConfig(
+                    r=lora_cfg.rank,
+                    lora_alpha=lora_cfg.alpha,
+                    target_modules=list(_LORA_TARGET_MODULES),
+                    lora_dropout=0.0,
+                    bias="none",
+                ),
+                self.paligemma_with_expert.paligemma.language_model,
+            )
+            logging.info("Applied LoRA to the PaliGemma language model (rank=%d)", lora_cfg.rank)
+
+        action_expert_config = _gemma.get_config(self.config.action_expert_variant)
+        if action_expert_config.lora_configs:
+            lora_cfg = action_expert_config.lora_configs["attn"]
+            peft.inject_adapter_in_model(
+                peft.LoraConfig(
+                    r=lora_cfg.rank,
+                    lora_alpha=lora_cfg.alpha,
+                    target_modules=list(_LORA_TARGET_MODULES),
+                    lora_dropout=0.0,
+                    bias="none",
+                ),
+                self.paligemma_with_expert.gemma_expert.model,
+            )
+            logging.info("Applied LoRA to the action-expert Gemma model (rank=%d)", lora_cfg.rank)
 
     def _apply_checkpoint(self, func, *args, **kwargs):
         if self.gradient_checkpointing_enabled and self.training:

@@ -24,10 +24,15 @@
 # that uses this script (installs timm + the transformers_replace patch; without it the model
 # can't even construct).
 #
-# Note on LoRA: unlike run_train_pi0_tactile_emb.sh's --lora flag, LoRA isn't a flag here --
-# paligemma_variant="gemma_2b_lora" and action_expert_variant="gemma_300m_lora" are hardcoded in
-# openpi_patches_pytorch/haptile_train_config_patch.py. Only TACTILE_EXPERT_VARIANT below is
-# env-overridable; to change the other two you'd edit that patch file directly.
+# Note on LoRA: unlike run_train_pi0_tactile_emb.sh's --lora flag, there's no LoRA toggle here --
+# it's implied by whether PYTORCH_WEIGHT_PATH is set below. paligemma_variant="gemma_2b_lora" and
+# action_expert_variant="gemma_300m_lora" are hardcoded in haptile_train_config_patch.py (only
+# TACTILE_EXPERT_VARIANT is env-overridable; to change the other two, edit that patch file), but
+# the LoRA freeze+adapter split only actually gets applied when a pretrained checkpoint is loaded
+# (freezing a randomly-initialized backbone would badly undertrain it) -- see
+# learning/pi0_ur5e/openpi_patches_pytorch/docs/ftp1_tactile_expert_port.md's "LoRA +
+# pretrained-weight loading" section for how to produce a checkpoint to point PYTORCH_WEIGHT_PATH
+# at (examples/convert_jax_model_to_pytorch.py, run from $OPENPI_ROOT).
 #
 # Note on PI05 below: matches run_train_pi0_tactile_emb.sh's --pi05 flag, just as an env var
 # instead of a bash flag (there's no train_pi0_base.sh-style flag parser for this script).
@@ -57,6 +62,10 @@ LOAD_T3_CHECKPOINT=true               # fine-tune the tactile ViT encoder from a
                                        # checkpoint rather than random init -- verified working
 T3_SENSOR_NAME=gs_tag                 # marker/dot-pattern GelSight gel -- must match your actual
                                        # sensor hardware, not just the "GelSight" brand name
+PYTORCH_WEIGHT_PATH=                  # e.g. ~/.cache/openpi/openpi-assets/checkpoints/pi0_base_pytorch
+                                       # -- seeds the VLM/action-expert backbone from a pretrained
+                                       # checkpoint and enables LoRA on it (see note above); leave
+                                       # empty to train the whole backbone from scratch instead
 
 cd "${OPENPI_ROOT}"
 source /users/CHANGE_ME/miniconda3/etc/profile.d/conda.sh   # CHANGE_ME: your conda.sh path
@@ -73,6 +82,7 @@ echo "Dataset root: ${DATASET_ROOT}"
 echo "Output dir: ${OUTPUT_DIR}"
 echo "WandB enabled: ${WANDB}"
 echo "PI05: ${PI05}"
+echo "Pretrained weight path (LoRA if set, full training from scratch if empty): ${PYTORCH_WEIGHT_PATH:-<none>}"
 echo "================================"
 
 echo "Checking GPU with nvidia-smi:"
@@ -121,6 +131,9 @@ elif [[ "${OVERWRITE}" == "true" ]]; then
 fi
 if [[ "${WANDB}" != "true" ]]; then
   TRAIN_CMD+=(--no-wandb_enabled)
+fi
+if [[ -n "${PYTORCH_WEIGHT_PATH}" ]]; then
+  TRAIN_CMD+=(--pytorch_weight_path "${PYTORCH_WEIGHT_PATH}")
 fi
 
 echo "Launching HaptileTactilePI0Pytorch training:"

@@ -42,7 +42,9 @@ intentionally distinct.
    `ftp1-policy`'s pin) to `pyproject.toml` and installed it via a bootstrapped `pip`
    (`python -m ensurepip`, since `uv` itself isn't on `PATH` in this environment).
    **`uv.lock` was not regenerated** — run `uv lock` on a machine with `uv` installed to keep it
-   in sync with `pyproject.toml`.
+   in sync with `pyproject.toml`. Same gap for **`peft==0.20.0`** (added later, for the LoRA
+   backbone support — see "LoRA + pretrained-weight loading" below), installed the same
+   bootstrapped-`pip` way for the same `uv` reason.
 
 ## `Observation` extension (`$OPENPI_ROOT/src/openpi/models/model.py`, direct edit)
 
@@ -270,9 +272,10 @@ the same `_CONFIGS` anchor `install_openpi_config.py` uses. Adds `TrainConfig(na
 "pi0_ur5e_cup_tactile", model=HaptileTactileConfig(...), data=TeleGsyLeRobotUR5eDataConfig(...,
 include_tactile_images=True), ...)`. No `weight_loader` is set — the existing
 `TeleGsyShapeTolerantCheckpointWeightLoader` shape-tolerantly restores a **JAX** params pytree,
-which doesn't correspond to this PyTorch model's `state_dict` naming at all; use
-`--pytorch_weight_path` (an existing `TrainConfig` field, consumed by `train_pytorch.py`-style
-scripts) to seed from a pretrained PyTorch checkpoint instead, if desired.
+which doesn't correspond to this PyTorch model's `state_dict` naming at all. Use
+`--pytorch_weight_path` (an existing `TrainConfig` field, consumed by `train_haptile_tactile_pytorch.py`)
+to seed the VLM/action-expert backbone from a real pretrained PyTorch checkpoint instead — see
+"LoRA + pretrained-weight loading" below for how to produce one and what it does and doesn't cover.
 
 **Installer bug found and fixed** (in both `install_openpi_pytorch_patch.py` and the pre-existing
 `install_openpi_config.py`): the "insert before anchor" fallback path did
@@ -290,12 +293,113 @@ then splices `haptile_train_config_patch.py` into `training/config.py`. Run
 `install_openpi_config.py` first (or re-run it after editing `pi0_ur5e_cup_config.py`) — the
 tactile block reuses classes only `install_openpi_config.py`'s block defines.
 
+## LoRA + pretrained-weight loading for the VLM/action-expert backbone
+
+Added so the VLM and action-expert branches can fine-tune from a real pretrained pi0 backbone
+with most of it frozen (LoRA), rather than training all ~4B backbone parameters from random init.
+The tactile expert and tactile ViT encoder are untouched by any of this — no pretrained tactile
+backbone exists, and they always train fully (the tactile encoder's own T3-checkpoint path is
+separate, see above).
+
+### Producing a pretrained PyTorch checkpoint
+
+openpi's own `examples/convert_jax_model_to_pytorch.py` converts an official JAX pi0/pi0.5
+checkpoint to a PyTorch `PI0Pytorch`-shaped `model.safetensors`. It wasn't built with this
+tactile-expert model in mind, but its output loads onto `HaptileTactilePI0Pytorch`'s VLM/action-expert
+submodules without any renaming, because `FTP1PaliGemmaWithExpertModel.paligemma`/`.gemma_expert`
+are the exact same `PaliGemmaForConditionalGeneration`/`GemmaForCausalLM` classes (same attribute
+names) that the plain 2-branch model uses.
+
+Two things had to be worked out to actually run it (not obvious from the script itself):
+- Point `--checkpoint_dir` at a **local** path, not `gs://openpi-assets/checkpoints/pi0_base`
+  directly — orbax's checkpointer does a strict validation (looking for a `commit_success.txt`
+  marker) that the public released checkpoint fails, raising `ValueError: Found incomplete
+  checkpoint`. `openpi.shared.download.maybe_download("gs://openpi-assets/checkpoints/pi0_base")`
+  (the same mechanism `TeleGsyShapeTolerantCheckpointWeightLoader` already uses) downloads it to
+  a local cache dir first and sidesteps this.
+- `--config_name` needs a registered `TrainConfig` whose `.model` is a `Pi0Config` with
+  `pi05=False` (to match `pi0_base`, not `pi05_base`) and `action_dim=32` (the base checkpoint's
+  own action space — this project's existing `pi0_ur5e_cup` config already resolves to exactly
+  this via `PI0_UR5E_PI05=false` and its `PI0_UR5E_STATE_DIM` default of 32, "kept for checkpoint
+  compatibility" per that config's own comment) — reusing it directly works, no new config needed.
+
+Converted with `PI0_UR5E_PI05=false uv run python examples/convert_jax_model_to_pytorch.py
+--checkpoint_dir <local pi0_base path> --config_name pi0_ur5e_cup --output_path <out> --precision
+bfloat16`. Result: ~6.6GB `model.safetensors`, cached at
+`~/.cache/openpi/openpi-assets/checkpoints/pi0_base_pytorch`.
+
+### `load_partial_pretrained_weights` (`haptile_tactile_pytorch.py`, module-level function)
+
+`config.pytorch_weight_path` (consumed in `train_haptile_tactile_pytorch.py`) used to load via
+plain `safetensors.torch.load_model(model, path)` — `strict=True` by default, meaning it refuses
+to load *anything* the moment a single key is missing or unexpected. A converted `pi0_base`
+checkpoint has no tactile-expert keys at all (nothing to load there — expected) and a different
+`action_dim` (32 vs. this project's 7), so `action_in_proj`/`action_out_proj`/`state_proj` also
+mismatch by shape. `load_partial_pretrained_weights` matches checkpoint keys to model keys by
+**both** name and shape, loads what matches, and leaves everything else (missing keys, shape
+mismatches) at its current value — verified: `matched=772, unexpected_in_checkpoint=0,
+shape_mismatch=[action_in_proj.weight, action_out_proj.{weight,bias}, state_proj.weight,
+paligemma_with_expert.gemma_expert.lm_head.weight]`. That last one is expected too: Gemma always
+constructs an `lm_head` (next-token-prediction head), but the action-expert branch never reads it
+(its output goes through `action_out_proj` instead) — harmless either way.
+
+### `apply_lora_to_backbone` (`HaptileTactilePI0Pytorch` method)
+
+Reuses the `"lora"` substring already present in `paligemma_variant`/`action_expert_variant`
+(`"gemma_2b_lora"`/`"gemma_300m_lora"`, unchanged defaults) — the exact same convention
+`Pi0Config.get_freeze_filter` reads on the JAX side — so this makes those names actually do
+something in PyTorch instead of being vestigial. Rank/alpha come from
+`_gemma.get_config(variant).lora_configs["attn"]` (16/16.0 for the VLM, 32/32.0 for the action
+expert), the same source of truth the JAX path was always backed by, not new hardcoded values.
+Uses `peft.inject_adapter_in_model` (not `get_peft_model`) — the surgical API for injecting LoRA
+into an arbitrary submodule in place, rather than wrapping a whole top-level model for
+generate()/save-load integration this codebase doesn't use. Target modules: `q_proj`/`k_proj`/
+`v_proj`/`o_proj`/`gate_proj`/`up_proj`/`down_proj` — confirmed against the installed
+(`transformers_replace`-patched) `modeling_gemma.py` that these are its actual attention/MLP
+Linear layer names. The vision tower is deliberately left untouched (matches
+`Pi0Config.get_freeze_filter`'s own precedent — its filter only ever matches `.*llm.*`, the
+vision tower was never frozen or LoRA'd, JAX or PyTorch). **Must be called after**
+`load_partial_pretrained_weights`, never before: `peft` renames wrapped layers
+(`q_proj.weight` → `q_proj.base_layer.weight`), so loading a plain pretrained checkpoint into an
+already-LoRA-wrapped model would fail to match almost every key.
+
+`peft` (`==0.20.0`) is a new dependency, added to `pyproject.toml`.
+
+### A debugging dead end worth recording
+
+Verifying this took an extended detour: a fresh LoRA adapter's `lora_A` gradient came back
+*exactly* zero on the very first backward pass, which looked exactly like a real bug (base
+weights correctly frozen, everything else — vision tower, tactile branch, `state_proj`/
+`action_in_proj` — correctly getting gradients, only the LoRA adapters silently blank). Spent
+real effort chasing this as if it were one: nested gradient-checkpointing interactions (ruled
+out — reproduced identically in `eval()` mode with checkpointing completely disabled), the
+attention/rotary-embedding code (read in full, nothing detaches the graph), even a bare isolated
+call to the wrapped `q_proj` alone with no surrounding model at all. It reproduced every time,
+including in a minimal ~15-line standalone `peft` script with no Haptile code involved — which is
+what finally revealed it: `lora_B` is zero-initialized by design (the standard LoRA convention,
+so the adapter is a no-op at init and exactly preserves the loaded pretrained backbone's
+behavior). Since `lora_B`'s Jacobian is exactly zero before its first update, the chain rule makes
+`lora_A`'s gradient exactly zero too on that first pass — correct, expected behavior, not a bug.
+Confirmed directly: the gradient is *present* (not `None`) on step one, and becomes genuinely
+nonzero from step two onward, once one optimizer step has moved `lora_B` away from zero. If you
+ever see this pattern again (LoRA adapter gradient present but exactly 0.0, only on the very
+first step), it's this — not a re-run of the checkpointing investigation.
+
 ## `scripts/train_haptile_tactile_pytorch.py`
 
 Fork of `$OPENPI_ROOT/scripts/train_pytorch.py`. Identical in every respect except the
 model-construction block: no `Pi0Config` fallback-conversion path (that model has no tactile
 branch), just a `TypeError` guard confirming `config.model` is a `HaptileTactileConfig`, then
 `HaptileTactilePI0Pytorch(model_cfg).to(device)`.
+
+Also differs in the weight-loading block: if `config.pytorch_weight_path` is set, loads via
+`load_partial_pretrained_weights` (tolerant, see above) instead of the base script's strict
+`safetensors.torch.load_model`, **then** calls `model.apply_lora_to_backbone()`. Both steps are
+gated on `pytorch_weight_path` being set — LoRA is deliberately *not* applied unconditionally off
+the config's variant names alone: freezing a randomly-initialized backbone (no pretrained weights
+loaded) and leaving only tiny LoRA adapters trainable would badly undertrain the model, so
+training from scratch (`pytorch_weight_path=None`) correctly falls back to full training of
+everything, LoRA-suffixed variant names notwithstanding.
 
 ## Verification performed
 
@@ -374,6 +478,21 @@ shared-rotary-embedding constraint noted above), on CPU:
   the config fields actually reach the encoder. This is what caught the `t3_large`-vs-`t3_medium`
   size-class bug documented above — the first attempt failed with `RuntimeError: size mismatch`
   on every block before the base URL was fixed.
+- **LoRA + pretrained-backbone-load check**: real converted `pi0_base` checkpoint (see "LoRA +
+  pretrained-weight loading" above) loaded via `load_partial_pretrained_weights` into the real
+  installed model — `matched=772, unexpected_in_checkpoint=0`, `shape_mismatch` exactly the
+  action-dim-dependent projection heads plus the unused `lm_head` (all expected); confirmed the
+  loaded values actually changed `q_proj`'s weights (not still random init). `apply_lora_to_backbone()`
+  then confirmed: base weights unchanged and frozen (`requires_grad=False`) on both the VLM and
+  action-expert branches; LoRA adapters trainable; vision tower still fully trainable (untouched);
+  tactile expert and tactile encoder untouched and still fully trainable. Two-step forward/backward
+  check (see the debugging-dead-end note above for why two steps, not one): step 1 — finite loss,
+  gradient *present* for both branches' LoRA adapters, `None` for both branches' frozen base
+  weights, present and nonzero for vision tower/tactile expert/tactile encoder/`state_proj`/
+  `action_in_proj`; after one optimizer step, `lora_B` confirmed moved away from its zero-init;
+  step 2 — LoRA adapter gradients now confirmed genuinely nonzero for both branches, base weights
+  still correctly `None`. `sample_actions` (inference) also checked afterward: finite,
+  correctly-shaped output.
 
 **Still not executed**: a *completed* multi-step training run (checkpoint save/load included) and
 a serving smoke test through `create_trained_policy`/`Policy.infer()` — the dry run above
