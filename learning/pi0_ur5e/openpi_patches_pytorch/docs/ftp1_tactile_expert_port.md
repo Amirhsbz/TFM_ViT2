@@ -365,6 +365,45 @@ already-LoRA-wrapped model would fail to match almost every key.
 
 `peft` (`==0.20.0`) is a new dependency, added to `pyproject.toml`.
 
+### Vision tower training strategy (`HaptileTactileConfig.vision_tower_mode`)
+
+`apply_lora_to_backbone` never touches the vision tower (matching `Pi0Config.get_freeze_filter`'s
+precedent), so by default it's fully trainable like every other Haptile version to date. That
+default carries an implicit assumption, though: `Pi0Config.get_freeze_filter`'s "never freeze
+vision" choice was validated on Physical Intelligence's own large, diverse training data, not on
+a single task with a handful of demos. At that scale, full fine-tuning of a ~400M-param pretrained
+SigLIP tower for thousands of steps means every frame gets seen by the model many times over
+(e.g. 30 demos × ~100 frames = 3,000 frames, 30,000 steps at batch_size=16 ≈ 160 epochs over the
+same 3,000 frames) — a real risk of catastrophic forgetting/overfitting that full training of the
+much larger language backbone doesn't have the same profile for.
+
+`vision_tower_mode: str = "full"` on `HaptileTactileConfig` (plus `vision_lora_rank`/
+`vision_lora_alpha`, defaults 16/16.0 matching the VLM's own rank) makes this a real per-run
+choice instead of a fixed default:
+- `"full"` (default): unchanged, matches every prior version.
+- `"frozen"`: zero adaptation, vision tower entirely frozen — the most conservative option.
+- `"lora"`: frozen base + trainable rank-`vision_lora_rank` adapters, via
+  `HaptileTactilePI0Pytorch.configure_vision_tower_training()`.
+
+Implemented the same way as `apply_lora_to_backbone` (`peft.inject_adapter_in_model`), but with
+its **own** `target_modules` list (`_VISION_LORA_TARGET_MODULES`) — confirmed against the
+installed `transformers.models.siglip.modeling_siglip`: `SiglipAttention` uses
+`q_proj`/`k_proj`/`v_proj`/`out_proj` (note `out_proj`, not `o_proj` like Gemma) and `SiglipMLP`
+uses `fc1`/`fc2` (not `gate_proj`/`up_proj`/`down_proj`) — genuinely different naming from the
+Gemma branches, not an oversight reusing the wrong list.
+
+`"lora"`/`"frozen"` only make sense adapting a *pretrained* vision tower (bundled in the same
+checkpoint as the VLM) — `train_haptile_tactile_pytorch.py` raises a clear `ValueError` before
+constructing the model at all if `vision_tower_mode != "full"` but `--pytorch_weight_path` isn't
+set, rather than silently training a randomly-initialized, frozen-or-adapter-only vision tower
+(which would never learn anything useful).
+
+Verified directly (learning from the debugging dead-end below — checked gradient *presence*, not
+magnitude, on the first LoRA step): `"frozen"` — vision tower gets no gradient at all and its
+weights are bit-identical after an optimizer step; `"lora"` — base frozen and unchanged, `lora_A`
+gradient present on step 1 (legitimately ~0 given `lora_B`'s zero-init, exactly like the language
+branches), genuinely nonzero on step 2 after one optimizer step moves `lora_B` away from zero.
+
 ### A debugging dead end worth recording
 
 Verifying this took an extended detour: a fresh LoRA adapter's `lora_A` gradient came back
@@ -493,6 +532,12 @@ shared-rotary-embedding constraint noted above), on CPU:
   step 2 — LoRA adapter gradients now confirmed genuinely nonzero for both branches, base weights
   still correctly `None`. `sample_actions` (inference) also checked afterward: finite,
   correctly-shaped output.
+- **Vision tower mode check**: for both `vision_tower_mode="frozen"` and `"lora"`, against the
+  real installed model with the same converted `pi0_base` checkpoint loaded — `"frozen"`:
+  `requires_grad=False`, no gradient computed at all, weights bit-identical after an optimizer
+  step; `"lora"`: base frozen and unchanged, `lora_A` gradient present (step 1) then genuinely
+  nonzero (step 2, after one optimizer step), matching the same pattern already verified for the
+  language branches. Confirmed a bogus `vision_tower_mode` value raises at config construction.
 
 **Still not executed**: a *completed* multi-step training run (checkpoint save/load included) and
 a serving smoke test through `create_trained_policy`/`Policy.infer()` — the dry run above
