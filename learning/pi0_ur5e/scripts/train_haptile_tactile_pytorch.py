@@ -393,6 +393,17 @@ def train_loop(config: _config.TrainConfig):
     # Update dtype to match pytorch_training_precision, same as train_pytorch.py.
     object.__setattr__(model_cfg, "dtype", config.pytorch_training_precision)
 
+    # Fail fast (before the expensive model construction below) rather than silently training
+    # with the vision tower left at "full" despite the config asking for something else: "lora"/
+    # "frozen" only make sense adapting a *pretrained* vision tower.
+    if model_cfg.vision_tower_mode != "full" and config.pytorch_weight_path is None:
+        raise ValueError(
+            f"vision_tower_mode={model_cfg.vision_tower_mode!r} requires --pytorch_weight_path to "
+            "be set -- freezing or LoRA-adapting a randomly-initialized vision tower would never "
+            "learn anything useful. Either set --pytorch_weight_path, or leave vision_tower_mode "
+            "at its default 'full'."
+        )
+
     model = openpi.models_pytorch.haptile_tactile_pytorch.HaptileTactilePI0Pytorch(model_cfg).to(device)
 
     if hasattr(model, "gradient_checkpointing_enable"):
@@ -447,6 +458,10 @@ def train_loop(config: _config.TrainConfig):
         # must happen after the pretrained-weight load above, never before (see
         # apply_lora_to_backbone's own docstring for why the order matters).
         lora_model.apply_lora_to_backbone()
+        # Vision tower: "full" (default) is a no-op; "lora"/"frozen" for small-dataset regimes --
+        # see configure_vision_tower_training's own docstring. The misconfiguration check above
+        # already guarantees pytorch_weight_path is set if this isn't "full".
+        lora_model.configure_vision_tower_training()
 
     # Optimizer + learning rate schedule from config
     warmup_steps = config.lr_schedule.warmup_steps
