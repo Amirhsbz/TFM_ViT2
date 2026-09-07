@@ -4,10 +4,9 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=00:30:00
-#SBATCH --output=CHANGE_ME/script_results/%x_%j.out
-#SBATCH --error=CHANGE_ME/script_results/%x_%j.err
-# CHANGE_ME: add --account/--partition/--qos directives if your cluster requires them.
-#
+#SBATCH --output=/scratch/users/k2691893/projects/tele-gsy/script_results/%x_%j.out
+#SBATCH --error=/scratch/users/k2691893/projects/tele-gsy/script_results/%x_%j.err
+
 # One-time (per fresh $OPENPI_ROOT checkout) setup for HaptileTactilePI0Pytorch -- installs the
 # tactile-expert model into $OPENPI_ROOT and patches its transformers package. Every step here is
 # idempotent, so it's also safe to re-run against an already-set-up checkout.
@@ -24,13 +23,13 @@
 
 set -e
 
-PROJECT_ROOT=CHANGE_ME          # e.g. /scratch/grp/luo/<you>/project/tele-gsy
-OPENPI_ROOT=CHANGE_ME           # e.g. /scratch/grp/luo/<you>/project/openpi
-FTP1_POLICY_ROOT=CHANGE_ME      # e.g. /scratch/grp/luo/<you>/project/ftp1-policy
+PROJECT_ROOT=/scratch/grp/luo/shiyi/project/tele-gsy-worktree-amir          
+OPENPI_ROOT=/scratch/users/k2691893/projects/openpi          
+FTP1_POLICY_ROOT=/scratch/grp/luo/Amir/FTP1/ftp1-policy  
 CONDA_ENV=tele
 
 cd "${OPENPI_ROOT}"
-source /users/CHANGE_ME/miniconda3/etc/profile.d/conda.sh   # CHANGE_ME: your conda.sh path
+source /scratch/users/k2691893/miniconda3/etc/profile.d/conda.sh
 conda activate "${CONDA_ENV}"
 
 echo "================================"
