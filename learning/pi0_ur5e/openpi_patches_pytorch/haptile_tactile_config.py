@@ -43,6 +43,19 @@ class HaptileTactileConfig(_model.BaseModelConfig):
     t3_sensor_name: str = "gs_tag"
     t3_checkpoint_cache_dir: str | None = None
 
+    # Vision tower (SigLIP) training strategy -- "full" (default, matches Pi0Config.get_freeze_filter's
+    # JAX-side precedent: never frozen or LoRA'd), "lora" (freeze base, train rank-`vision_lora_rank`
+    # adapters), or "frozen" (no adaptation at all). "full" is the established default for this
+    # project's larger/more diverse datasets; "lora"/"frozen" exist for small-dataset regimes (a
+    # handful of demos per task) where full fine-tuning of a ~400M-param pretrained vision tower
+    # risks catastrophic forgetting / overfitting -- see the "Vision tower training strategy"
+    # section of ftp1_tactile_expert_port.md for the full reasoning. "lora"/"frozen" only make
+    # sense adapting a *pretrained* vision tower (bundled in the same checkpoint as the VLM), so
+    # train_haptile_tactile_pytorch.py requires --pytorch_weight_path to be set for either.
+    vision_tower_mode: str = "full"
+    vision_lora_rank: int = 16
+    vision_lora_alpha: float = 16.0
+
     # Selects the pi0 vs pi0.5 transform/embedding convention, mirroring Pi0Config.pi05.
     # Defaults to False (plain pi0): every other task's TrainConfig in this repo (fold_Tshirt
     # included) passes --pi05 false to train_pi0_base.sh -- pi0.5 was never this project's actual
@@ -70,6 +83,8 @@ class HaptileTactileConfig(_model.BaseModelConfig):
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
         if self.discrete_state_input is None:
             object.__setattr__(self, "discrete_state_input", self.pi05)
+        if self.vision_tower_mode not in ("full", "lora", "frozen"):
+            raise ValueError(f"vision_tower_mode must be one of 'full'/'lora'/'frozen', got {self.vision_tower_mode!r}")
 
     @property
     def model_type(self) -> _model.ModelType:
