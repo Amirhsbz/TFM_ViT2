@@ -5,9 +5,9 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32G
 #SBATCH --time=02:00:00
-#SBATCH --output=CHANGE_ME/script_results/%x_%j.out
-#SBATCH --error=CHANGE_ME/script_results/%x_%j.err
-# CHANGE_ME: add --account/--partition/--qos directives if your cluster requires them.
+#SBATCH --output=/scratch/users/k2691893/projects/tele-gsy/script_results/%x_%j.out
+#SBATCH --error=/scratch/users/k2691893/projects/tele-gsy/script_results/%x_%j.err
+
 #
 # Part 1 of the new tactile-expert pipeline: converts a raw dataset to LeRobot format with
 # --tactile-feature-mode raw_image (writes tactile pixels as their own image columns, keeps
@@ -23,20 +23,20 @@
 
 set -e
 
-PROJECT_ROOT=CHANGE_ME              # e.g. /scratch/grp/luo/<you>/project/tele-gsy
-OPENPI_ROOT=CHANGE_ME               # e.g. /scratch/grp/luo/<you>/project/openpi
-DATASET_NAME=CHANGE_ME              # e.g. fold_Tshirt
+PROJECT_ROOT=/scratch/grp/luo/Amir/TFM_ViT2               # e.g. /scratch/grp/luo/<you>/project/tele-gsy
+OPENPI_ROOT=/scratch/users/k2691893/projects/openpi               # e.g. /scratch/grp/luo/<you>/project/openpi
+DATASET_NAME=wipe_board              # e.g. fold_Tshirt
 OUTPUT_NAME=${DATASET_NAME}_lerobot_tactile_raw
 REPO_ID=local/pi0_ur5e_${DATASET_NAME}_tactile_raw
-DEFAULT_PROMPT="CHANGE_ME"          # e.g. "Fold the t-shirt in half"
+DEFAULT_PROMPT="Grab the sponge, wipe the markers on the white board and put the sponge back"          # e.g. "Fold the t-shirt in half"
 
-INPUT_ROOT=${PROJECT_ROOT}/shared/data/bc_data/${DATASET_NAME}
+INPUT_ROOT=/scratch/grp/luo/shiyi/project/tele-gsy/shared/data/bc_data/${DATASET_NAME}
 OUTPUT_ROOT=${PROJECT_ROOT}/outputs/${OUTPUT_NAME}
 CONFIG_PATH=${PROJECT_ROOT}/learning/pi0_ur5e/configs/dataset_schema.yaml
 CONVERT_SCRIPT=${PROJECT_ROOT}/learning/pi0_ur5e/scripts/convert_to_lerobot.py
 
 cd "${OPENPI_ROOT}"
-source /users/CHANGE_ME/miniconda3/etc/profile.d/conda.sh   # CHANGE_ME: your conda.sh path
+source /scratch/users/k2691893/miniconda3/etc/profile.d/conda.sh   # CHANGE_ME: your conda.sh path
 conda activate tele
 
 echo "================================"

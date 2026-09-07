@@ -23,7 +23,7 @@
 
 set -e
 
-PROJECT_ROOT=/scratch/grp/luo/shiyi/project/tele-gsy-worktree-amir          
+PROJECT_ROOT=/scratch/grp/luo/Amir/TFM_ViT2      
 OPENPI_ROOT=/scratch/users/k2691893/projects/openpi          
 FTP1_POLICY_ROOT=/scratch/grp/luo/Amir/FTP1/ftp1-policy  
 CONDA_ENV=tele

@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
-#SBATCH --output=CHANGE_ME/script_results/%x_%j.out
-#SBATCH --error=CHANGE_ME/script_results/%x_%j.err
+#SBATCH --output=/scratch/users/k2691893/projects/tele-gsy/script_results/%x_%j.out
+#SBATCH --error=/scratch/users/k2691893/projects/tele-gsy/script_results/%x_%j.err
 # CHANGE_ME: add --account/--qos/--exclude directives to match your cluster's current
 # conventions (don't copy run_train_pi0_tactile_emb.sh's --exclude node list blindly -- check
 # whether those nodes are still flaky before reusing it).
@@ -41,11 +41,11 @@
 
 set -e
 
-PROJECT_ROOT=CHANGE_ME                # e.g. /scratch/grp/luo/<you>/project/tele-gsy
-OPENPI_ROOT=CHANGE_ME                 # e.g. /scratch/grp/luo/<you>/project/openpi
-DATASET_NAME=CHANGE_ME                # must match run_convert_pi0_lerobot_tactile_raw.sh's DATASET_NAME
-DEFAULT_PROMPT="CHANGE_ME"            # must match run_convert_pi0_lerobot_tactile_raw.sh's DEFAULT_PROMPT
-EXP_NAME=CHANGE_ME                    # e.g. ${DATASET_NAME}_haptile_tactile
+PROJECT_ROOT=scratch/grp/luo/Amir/TFM_ViT2                # e.g. /scratch/grp/luo/<you>/project/tele-gsy
+OPENPI_ROOT=/scratch/users/k2691893/projects/openpi                  # e.g. /scratch/grp/luo/<you>/project/openpi
+DATASET_NAME=wipe_board                # must match run_convert_pi0_lerobot_tactile_raw.sh's DATASET_NAME
+DEFAULT_PROMPT="Grab the sponge, wipe the markers on the white board and put the sponge back"            # must match run_convert_pi0_lerobot_tactile_raw.sh's DEFAULT_PROMPT
+EXP_NAME=${DATASET_NAME}_haptile_tactileexpert_vit                    # e.g. ${DATASET_NAME}_haptile_tactile
 
 LEROBOT_REPO_ID=local/pi0_ur5e_${DATASET_NAME}_tactile_raw
 DATASET_ROOT=${PROJECT_ROOT}/outputs/${DATASET_NAME}_lerobot_tactile_raw
@@ -65,13 +65,13 @@ T3_SENSOR_NAME=gs_tag                 # marker/dot-pattern GelSight gel -- must 
 T3_CACHE_DIR=${PROJECT_ROOT}/shared/t3_cache  # shared across experiments/EXP_NAMEs, not scoped to
                                        # OUTPUT_DIR -- downloaded once (~84MB), reused by every run
                                        # instead of every new experiment re-downloading its own copy
-PYTORCH_WEIGHT_PATH=                  # e.g. ~/.cache/openpi/openpi-assets/checkpoints/pi0_base_pytorch
+PYTORCH_WEIGHT_PATH=/scratch/users/k2691893/projects/openpi/openpi-assets/checkpoints/pi0_base_pytorch/pi0_base_pytorch                 # e.g. ~/.cache/openpi/openpi-assets/checkpoints/pi0_base_pytorch
                                        # -- seeds the VLM/action-expert backbone from a pretrained
                                        # checkpoint and enables LoRA on it (see note above); leave
                                        # empty to train the whole backbone from scratch instead
 
 cd "${OPENPI_ROOT}"
-source /users/CHANGE_ME/miniconda3/etc/profile.d/conda.sh   # CHANGE_ME: your conda.sh path
+source /scratch/users/k2691893/miniconda3/etc/profile.d/conda.sh   # CHANGE_ME: your conda.sh path
 conda activate tele
 
 echo "================================"
