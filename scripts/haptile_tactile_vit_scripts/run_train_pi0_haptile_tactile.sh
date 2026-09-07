@@ -62,6 +62,9 @@ LOAD_T3_CHECKPOINT=true               # fine-tune the tactile ViT encoder from a
                                        # checkpoint rather than random init -- verified working
 T3_SENSOR_NAME=gs_tag                 # marker/dot-pattern GelSight gel -- must match your actual
                                        # sensor hardware, not just the "GelSight" brand name
+T3_CACHE_DIR=${PROJECT_ROOT}/shared/t3_cache  # shared across experiments/EXP_NAMEs, not scoped to
+                                       # OUTPUT_DIR -- downloaded once (~84MB), reused by every run
+                                       # instead of every new experiment re-downloading its own copy
 PYTORCH_WEIGHT_PATH=                  # e.g. ~/.cache/openpi/openpi-assets/checkpoints/pi0_base_pytorch
                                        # -- seeds the VLM/action-expert backbone from a pretrained
                                        # checkpoint and enables LoRA on it (see note above); leave
@@ -83,6 +86,7 @@ echo "Output dir: ${OUTPUT_DIR}"
 echo "WandB enabled: ${WANDB}"
 echo "PI05: ${PI05}"
 echo "Pretrained weight path (LoRA if set, full training from scratch if empty): ${PYTORCH_WEIGHT_PATH:-<none>}"
+echo "T3 tactile encoder checkpoint: load=${LOAD_T3_CHECKPOINT} sensor=${T3_SENSOR_NAME} cache_dir=${T3_CACHE_DIR}"
 echo "================================"
 
 echo "Checking GPU with nvidia-smi:"
@@ -109,7 +113,7 @@ export PI0_UR5E_TACTILE_EXPERT_VARIANT="${TACTILE_EXPERT_VARIANT}"
 export PI0_UR5E_TACTILE_PI05="${PI05}"
 export PI0_UR5E_TACTILE_LOAD_T3_CHECKPOINT="${LOAD_T3_CHECKPOINT}"
 export PI0_UR5E_TACTILE_T3_SENSOR_NAME="${T3_SENSOR_NAME}"
-export PI0_UR5E_TACTILE_T3_CACHE_DIR="${OUTPUT_DIR}/t3_cache"
+export PI0_UR5E_TACTILE_T3_CACHE_DIR="${T3_CACHE_DIR}"
 export PI0_UR5E_TACTILE_ASSETS_BASE_DIR="${OUTPUT_DIR}/assets"
 export PI0_UR5E_TACTILE_CHECKPOINT_BASE_DIR="${OUTPUT_DIR}/checkpoints"
 export PI0_UR5E_DEFAULT_PROMPT="${DEFAULT_PROMPT}"
