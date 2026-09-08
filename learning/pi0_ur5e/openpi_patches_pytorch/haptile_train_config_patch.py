@@ -54,6 +54,14 @@ _TELE_GSY_PI0_UR5E_TACTILE_MODEL = HaptileTactileConfig(
     load_t3_tactile_checkpoint=_tele_gsy_tactile_env_bool("PI0_UR5E_TACTILE_LOAD_T3_CHECKPOINT", True),
     t3_sensor_name=_tele_gsy_os.environ.get("PI0_UR5E_TACTILE_T3_SENSOR_NAME", "gs_tag"),
     t3_checkpoint_cache_dir=_tele_gsy_os.environ.get("PI0_UR5E_TACTILE_T3_CACHE_DIR") or None,
+    # "full" (default) matches Pi0Config.get_freeze_filter's own JAX-side precedent (vision tower
+    # never frozen/LoRA'd); "lora"/"frozen" are for small-dataset regimes -- see
+    # HaptileTactileConfig.vision_tower_mode's own field comment. Only meaningful (and only
+    # accepted by train_haptile_tactile_pytorch.py) when PI0_UR5E_TACTILE_PYTORCH_WEIGHT_PATH is
+    # also set, i.e. --pytorch_weight_path.
+    vision_tower_mode=_tele_gsy_os.environ.get("PI0_UR5E_TACTILE_VISION_TOWER_MODE", "full"),
+    vision_lora_rank=_tele_gsy_tactile_env_int("PI0_UR5E_TACTILE_VISION_LORA_RANK", 16),
+    vision_lora_alpha=float(_tele_gsy_os.environ.get("PI0_UR5E_TACTILE_VISION_LORA_ALPHA", "16.0")),
     action_dim=7,
     action_horizon=_tele_gsy_tactile_env_int("PI0_UR5E_TACTILE_ACTION_HORIZON", 50),
     max_token_len=_tele_gsy_tactile_env_int("PI0_UR5E_TACTILE_MAX_TOKEN_LEN"),

@@ -46,6 +46,12 @@ import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
 # modeling_gemma.py -- what peft.LoraConfig(target_modules=...) needs to match by suffix.
 _LORA_TARGET_MODULES = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
 
+# SigLIP's own attention/MLP module names -- confirmed against the installed transformers.models.
+# siglip.modeling_siglip: SiglipAttention uses q_proj/k_proj/v_proj/out_proj (note out_proj, not
+# o_proj like Gemma), SiglipMLP uses fc1/fc2 (not gate_proj/up_proj/down_proj). A separate list
+# from _LORA_TARGET_MODULES because the naming genuinely differs, not an oversight.
+_VISION_LORA_TARGET_MODULES = ("q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2")
+
 
 def load_partial_pretrained_weights(model: nn.Module, weight_path: str) -> dict:
     """Loads a safetensors checkpoint into `model`, keeping only tensors that match both name
@@ -248,6 +254,50 @@ class HaptileTactilePI0Pytorch(nn.Module):
                 self.paligemma_with_expert.gemma_expert.model,
             )
             logging.info("Applied LoRA to the action-expert Gemma model (rank=%d)", lora_cfg.rank)
+
+    def configure_vision_tower_training(self):
+        """Applies config.vision_tower_mode to the SigLIP vision tower: "full" (default) is a
+        no-op -- the vision tower is fully trainable from construction, matching
+        Pi0Config.get_freeze_filter's own JAX-side precedent (its freeze filter never matches the
+        vision tower). "frozen" and "lora" exist for small-dataset regimes: full fine-tuning of a
+        ~400M-param pretrained vision tower on a handful of demos per task risks catastrophic
+        forgetting of its pretrained visual features (repeated exposure to a small, narrow set of
+        frames over many training epochs), which full training of the much-larger, differently-
+        motivated language backbone doesn't have the same risk profile for.
+
+        Like apply_lora_to_backbone, this should only be called when a pretrained checkpoint has
+        actually been loaded (train_haptile_tactile_pytorch.py enforces this) -- freezing or
+        LoRA-adapting a randomly-initialized vision tower would never learn anything useful.
+
+        Uses a separate target_modules list from the Gemma branches: SigLIP's own attention/MLP
+        modules are named differently (q_proj/k_proj/v_proj/out_proj + fc1/fc2, not
+        o_proj/gate_proj/up_proj/down_proj).
+        """
+        mode = self.config.vision_tower_mode
+        if mode == "full":
+            return
+
+        vision_tower = self.paligemma_with_expert.paligemma.vision_tower
+        if mode == "frozen":
+            for param in vision_tower.parameters():
+                param.requires_grad_(False)
+            logging.info("Vision tower fully frozen (vision_tower_mode='frozen')")
+        elif mode == "lora":
+            import peft
+
+            peft.inject_adapter_in_model(
+                peft.LoraConfig(
+                    r=self.config.vision_lora_rank,
+                    lora_alpha=self.config.vision_lora_alpha,
+                    target_modules=list(_VISION_LORA_TARGET_MODULES),
+                    lora_dropout=0.0,
+                    bias="none",
+                ),
+                vision_tower,
+            )
+            logging.info("Applied LoRA to the vision tower (rank=%d)", self.config.vision_lora_rank)
+        else:
+            raise ValueError(f"Unknown vision_tower_mode: {mode!r}")
 
     def _apply_checkpoint(self, func, *args, **kwargs):
         if self.gradient_checkpointing_enabled and self.training:

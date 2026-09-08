@@ -38,6 +38,13 @@
 # instead of a bash flag (there's no train_pi0_base.sh-style flag parser for this script).
 # Defaults to false (plain pi0) -- this project's actual convention across every task, T-shirt
 # folding included; pi0.5 is opt-in via PI05=true.
+#
+# Note on VISION_TOWER_MODE below: for small datasets (a handful of demos per task), fully
+# fine-tuning the ~400M-param pretrained vision tower for thousands of steps risks catastrophic
+# forgetting/overfitting -- "lora"/"frozen" trade some vision adaptation capacity for protection
+# against that. Only valid together with PYTORCH_WEIGHT_PATH being set (adapting/freezing a
+# randomly-initialized vision tower would never learn anything useful) -- the training script
+# errors clearly if you set this without also setting PYTORCH_WEIGHT_PATH.
 
 set -e
 
@@ -69,6 +76,10 @@ PYTORCH_WEIGHT_PATH=/scratch/users/k2691893/projects/openpi/openpi-assets/checkp
                                        # -- seeds the VLM/action-expert backbone from a pretrained
                                        # checkpoint and enables LoRA on it (see note above); leave
                                        # empty to train the whole backbone from scratch instead
+VISION_TOWER_MODE=full                 # "full" (default, matches JAX precedent) / "lora" / "frozen"
+                                       # -- only valid if PYTORCH_WEIGHT_PATH is set, see note above
+VISION_LORA_RANK=16                    # only used if VISION_TOWER_MODE=lora
+VISION_LORA_ALPHA=16.0                 # only used if VISION_TOWER_MODE=lora
 
 cd "${OPENPI_ROOT}"
 source /scratch/users/k2691893/miniconda3/etc/profile.d/conda.sh   # CHANGE_ME: your conda.sh path
@@ -87,6 +98,7 @@ echo "WandB enabled: ${WANDB}"
 echo "PI05: ${PI05}"
 echo "Pretrained weight path (LoRA if set, full training from scratch if empty): ${PYTORCH_WEIGHT_PATH:-<none>}"
 echo "T3 tactile encoder checkpoint: load=${LOAD_T3_CHECKPOINT} sensor=${T3_SENSOR_NAME} cache_dir=${T3_CACHE_DIR}"
+echo "Vision tower mode: ${VISION_TOWER_MODE} (rank=${VISION_LORA_RANK} alpha=${VISION_LORA_ALPHA} if lora)"
 echo "================================"
 
 echo "Checking GPU with nvidia-smi:"
@@ -114,6 +126,9 @@ export PI0_UR5E_TACTILE_PI05="${PI05}"
 export PI0_UR5E_TACTILE_LOAD_T3_CHECKPOINT="${LOAD_T3_CHECKPOINT}"
 export PI0_UR5E_TACTILE_T3_SENSOR_NAME="${T3_SENSOR_NAME}"
 export PI0_UR5E_TACTILE_T3_CACHE_DIR="${T3_CACHE_DIR}"
+export PI0_UR5E_TACTILE_VISION_TOWER_MODE="${VISION_TOWER_MODE}"
+export PI0_UR5E_TACTILE_VISION_LORA_RANK="${VISION_LORA_RANK}"
+export PI0_UR5E_TACTILE_VISION_LORA_ALPHA="${VISION_LORA_ALPHA}"
 export PI0_UR5E_TACTILE_ASSETS_BASE_DIR="${OUTPUT_DIR}/assets"
 export PI0_UR5E_TACTILE_CHECKPOINT_BASE_DIR="${OUTPUT_DIR}/checkpoints"
 export PI0_UR5E_DEFAULT_PROMPT="${DEFAULT_PROMPT}"
