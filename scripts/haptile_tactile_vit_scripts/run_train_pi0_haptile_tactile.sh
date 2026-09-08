@@ -72,11 +72,11 @@ T3_SENSOR_NAME=gs_tag                 # marker/dot-pattern GelSight gel -- must 
 T3_CACHE_DIR=${PROJECT_ROOT}/shared/t3_cache  # shared across experiments/EXP_NAMEs, not scoped to
                                        # OUTPUT_DIR -- downloaded once (~84MB), reused by every run
                                        # instead of every new experiment re-downloading its own copy
-PYTORCH_WEIGHT_PATH=/scratch/users/k2691893/projects/openpi/openpi-assets/checkpoints/pi0_base_pytorch/pi0_base_pytorch                 # e.g. ~/.cache/openpi/openpi-assets/checkpoints/pi0_base_pytorch
+PYTORCH_WEIGHT_PATH=/scratch/users/k2691893/projects/openpi/openpi-assets/checkpoints/pi0_base_pytorch             # e.g. ~/.cache/openpi/openpi-assets/checkpoints/pi0_base_pytorch
                                        # -- seeds the VLM/action-expert backbone from a pretrained
                                        # checkpoint and enables LoRA on it (see note above); leave
                                        # empty to train the whole backbone from scratch instead
-VISION_TOWER_MODE=full                 # "full" (default, matches JAX precedent) / "lora" / "frozen"
+VISION_TOWER_MODE=lora                 # "full" (default, matches JAX precedent) / "lora" / "frozen"
                                        # -- only valid if PYTORCH_WEIGHT_PATH is set, see note above
 VISION_LORA_RANK=16                    # only used if VISION_TOWER_MODE=lora
 VISION_LORA_ALPHA=16.0                 # only used if VISION_TOWER_MODE=lora
