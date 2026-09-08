@@ -41,7 +41,7 @@
 
 set -e
 
-PROJECT_ROOT=scratch/grp/luo/Amir/TFM_ViT2                # e.g. /scratch/grp/luo/<you>/project/tele-gsy
+PROJECT_ROOT=/scratch/grp/luo/Amir/TFM_ViT2                # e.g. /scratch/grp/luo/<you>/project/tele-gsy
 OPENPI_ROOT=/scratch/users/k2691893/projects/openpi                  # e.g. /scratch/grp/luo/<you>/project/openpi
 DATASET_NAME=wipe_board                # must match run_convert_pi0_lerobot_tactile_raw.sh's DATASET_NAME
 DEFAULT_PROMPT="Grab the sponge, wipe the markers on the white board and put the sponge back"            # must match run_convert_pi0_lerobot_tactile_raw.sh's DEFAULT_PROMPT
