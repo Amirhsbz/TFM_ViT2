@@ -63,6 +63,10 @@ OVERWRITE=true                        # set RESUME=true (and OVERWRITE irrelevan
 RESUME=false
 STEPS=30000
 BATCH_SIZE=16
+SAVE_INTERVAL=3000                    # checkpoint every N steps; train_haptile_tactile_pytorch.py
+                                       # prunes old ones automatically (keeps the last couple in
+                                       # full for --resume, plus model-only keep_period milestones)
+                                       # so this no longer grows disk usage without bound
 TACTILE_EXPERT_VARIANT=gemma_300m     # only field env-overridable here -- see note above
 PI05=false                            # plain pi0 (this project's convention); true = pi0.5 -- see note above
 LOAD_T3_CHECKPOINT=true               # fine-tune the tactile ViT encoder from a pretrained T3
@@ -121,6 +125,7 @@ export PI0_UR5E_TACTILE_LEROBOT_REPO_ID="${LEROBOT_REPO_ID}"
 export PI0_UR5E_TACTILE_ASSET_ID="${LEROBOT_REPO_ID}"
 export PI0_UR5E_TACTILE_TRAIN_STEPS="${STEPS}"
 export PI0_UR5E_TACTILE_BATCH_SIZE="${BATCH_SIZE}"
+export PI0_UR5E_TACTILE_SAVE_INTERVAL="${SAVE_INTERVAL}"
 export PI0_UR5E_TACTILE_EXPERT_VARIANT="${TACTILE_EXPERT_VARIANT}"
 export PI0_UR5E_TACTILE_PI05="${PI05}"
 export PI0_UR5E_TACTILE_LOAD_T3_CHECKPOINT="${LOAD_T3_CHECKPOINT}"

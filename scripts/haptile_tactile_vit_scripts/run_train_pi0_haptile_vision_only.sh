@@ -73,6 +73,10 @@ OVERWRITE=true                        # set RESUME=true (and OVERWRITE irrelevan
 RESUME=false
 STEPS=30000
 BATCH_SIZE=16
+SAVE_INTERVAL=3000                    # checkpoint every N steps; train_haptile_tactile_pytorch.py
+                                       # prunes old ones automatically (keeps the last couple in
+                                       # full for --resume, plus model-only keep_period milestones)
+                                       # so this no longer grows disk usage without bound
 PI05=false                            # plain pi0 (this project's convention); true = pi0.5 -- see note above
 PYTORCH_WEIGHT_PATH=/scratch/users/k2691893/projects/openpi/openpi-assets/checkpoints/pi0_base_pytorch                # e.g. ~/.cache/openpi/openpi-assets/checkpoints/pi0_base_pytorch
                                        # -- seeds the VLM/action-expert backbone from a pretrained
@@ -123,6 +127,7 @@ export PI0_UR5E_TACTILE_LEROBOT_REPO_ID="${LEROBOT_REPO_ID}"
 export PI0_UR5E_TACTILE_ASSET_ID="${LEROBOT_REPO_ID}"
 export PI0_UR5E_TACTILE_TRAIN_STEPS="${STEPS}"
 export PI0_UR5E_TACTILE_BATCH_SIZE="${BATCH_SIZE}"
+export PI0_UR5E_TACTILE_SAVE_INTERVAL="${SAVE_INTERVAL}"
 export PI0_UR5E_TACTILE_PI05="${PI05}"
 export PI0_UR5E_TACTILE_USE_TACTILE_INPUT=false
 export PI0_UR5E_TACTILE_VISION_TOWER_MODE="${VISION_TOWER_MODE}"
@@ -153,12 +158,6 @@ fi
 if [[ -n "${PYTORCH_WEIGHT_PATH}" ]]; then
   TRAIN_CMD+=(--pytorch_weight_path "${PYTORCH_WEIGHT_PATH}")
 fi
-# Any extra arguments passed to this script (sbatch/srun/bash ... -- --num_train_steps 3) are
-# forwarded straight to train_haptile_tactile_pytorch.py, appended last so they override the
-# flags set above -- e.g. for a quick unattended dry run before a full sbatch submission:
-#   srun --gres=gpu:1 --cpus-per-task=16 --mem=64G --time=00:30:00 \
-#     bash run_train_pi0_haptile_vision_only.sh --num_train_steps 3
-TRAIN_CMD+=("$@")
 
 echo "Launching HaptileTactilePI0Pytorch training (vision-only):"
 printf '%q ' "${TRAIN_CMD[@]}"; printf '\n'
