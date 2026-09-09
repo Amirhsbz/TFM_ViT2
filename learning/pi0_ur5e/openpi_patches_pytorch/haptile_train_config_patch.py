@@ -96,7 +96,11 @@ _CONFIGS.append(
         batch_size=_tele_gsy_tactile_env_int("PI0_UR5E_TACTILE_BATCH_SIZE", 16),
         assets_base_dir=_tele_gsy_os.environ.get("PI0_UR5E_TACTILE_ASSETS_BASE_DIR", "./assets"),
         checkpoint_base_dir=_tele_gsy_os.environ.get("PI0_UR5E_TACTILE_CHECKPOINT_BASE_DIR", "./checkpoints"),
-        keep_period=_tele_gsy_tactile_env_int("PI0_UR5E_TACTILE_KEEP_PERIOD", 1000),
+        # How often a checkpoint is written; train_haptile_tactile_pytorch.py's
+        # _prune_old_checkpoints then bounds disk usage by keeping only the most recent couple of
+        # checkpoints in full (model + optimizer) plus model-only keep_period milestones.
+        save_interval=_tele_gsy_tactile_env_int("PI0_UR5E_TACTILE_SAVE_INTERVAL", 3000),
+        keep_period=_tele_gsy_tactile_env_int("PI0_UR5E_TACTILE_KEEP_PERIOD", 15000),
         ema_decay=None,
         policy_metadata={
             "robot_type": "ur5e",
