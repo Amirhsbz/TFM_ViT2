@@ -136,6 +136,44 @@ def get_model_parameters(model):
     )
 
 
+# Number of most-recent checkpoints to keep in full (model + optimizer state), so --resume always
+# has an optimizer state to load from. Every other checkpoint is pruned by _prune_old_checkpoints:
+# kept model-only (optimizer.pt dropped) if it lands on a config.keep_period milestone, deleted
+# entirely otherwise. Without this, every checkpoint accumulates forever (model.safetensors +
+# optimizer.pt each) and can exhaust disk quota well before training finishes.
+_NUM_RECENT_CHECKPOINTS_WITH_OPTIMIZER = 2
+
+
+def _prune_old_checkpoints(config):
+    """Bound checkpoint disk usage: keep the most recent checkpoints fully (for --resume), keep
+    keep_period milestones model-only, and delete everything else."""
+    checkpoint_steps = sorted(
+        (
+            int(d.name)
+            for d in config.checkpoint_dir.iterdir()
+            if d.is_dir() and d.name.isdigit() and not d.name.startswith("tmp_")
+        ),
+        reverse=True,
+    )
+    recent_steps = set(checkpoint_steps[:_NUM_RECENT_CHECKPOINTS_WITH_OPTIMIZER])
+
+    for step in checkpoint_steps:
+        if step in recent_steps:
+            continue
+
+        ckpt_dir = config.checkpoint_dir / f"{step}"
+        if config.keep_period and step % config.keep_period == 0:
+            # Milestone: keep model.safetensors/metadata/assets, drop the (much larger)
+            # optimizer.pt since a milestone is for eval/inference, not for resuming from.
+            optimizer_path = ckpt_dir / "optimizer.pt"
+            if optimizer_path.exists():
+                optimizer_path.unlink()
+                logging.info(f"Pruned optimizer state from milestone checkpoint {ckpt_dir}")
+        else:
+            shutil.rmtree(ckpt_dir)
+            logging.info(f"Deleted old checkpoint {ckpt_dir}")
+
+
 def save_checkpoint(model, optimizer, global_step, config, is_main, data_config):
     """Save a checkpoint with model state, optimizer state, and metadata."""
     if not is_main:
@@ -178,6 +216,8 @@ def save_checkpoint(model, optimizer, global_step, config, is_main, data_config)
         tmp_ckpt_dir.rename(final_ckpt_dir)
 
         logging.info(f"Saved checkpoint at step {global_step} -> {final_ckpt_dir}")
+
+        _prune_old_checkpoints(config)
 
         # Log checkpoint to wandb
         if config.wandb_enabled:
