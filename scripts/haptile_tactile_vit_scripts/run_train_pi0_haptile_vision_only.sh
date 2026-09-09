@@ -55,7 +55,7 @@
 
 set -e
 
-PROJECT_ROOT=scratch/grp/luo/Amir/TFM_ViT2                # e.g. /scratch/grp/luo/<you>/project/tele-gsy
+PROJECT_ROOT=/scratch/grp/luo/Amir/TFM_ViT2                # e.g. /scratch/grp/luo/<you>/project/tele-gsy
 OPENPI_ROOT=/scratch/users/k2691893/projects/openpi                  # e.g. /scratch/grp/luo/<you>/project/openpi
 DATASET_NAME=wipe_board                # must match run_convert_pi0_lerobot_tactile_raw.sh's DATASET_NAME
 DEFAULT_PROMPT="Grab the sponge, wipe the markers on the white board and put the sponge back"            # must match run_convert_pi0_lerobot_tactile_raw.sh's DEFAULT_PROMPT
@@ -74,11 +74,11 @@ RESUME=false
 STEPS=30000
 BATCH_SIZE=16
 PI05=false                            # plain pi0 (this project's convention); true = pi0.5 -- see note above
-PYTORCH_WEIGHT_PATH=                  # e.g. ~/.cache/openpi/openpi-assets/checkpoints/pi0_base_pytorch
+PYTORCH_WEIGHT_PATH=/scratch/users/k2691893/projects/openpi/openpi-assets/checkpoints/pi0_base_pytorch                # e.g. ~/.cache/openpi/openpi-assets/checkpoints/pi0_base_pytorch
                                        # -- seeds the VLM/action-expert backbone from a pretrained
                                        # checkpoint and enables LoRA on it (see note above); leave
                                        # empty to train the whole backbone from scratch instead
-VISION_TOWER_MODE=full                 # "full" (default, matches JAX precedent) / "lora" / "frozen"
+VISION_TOWER_MODE=lora                 # "full" (default, matches JAX precedent) / "lora" / "frozen"
                                        # -- only valid if PYTORCH_WEIGHT_PATH is set, see note above
 VISION_LORA_RANK=16                    # only used if VISION_TOWER_MODE=lora
 VISION_LORA_ALPHA=16.0                 # only used if VISION_TOWER_MODE=lora
