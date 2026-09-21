@@ -131,6 +131,10 @@ class HaptileTactileConfig(_model.BaseModelConfig):
 
         with safetensors.safe_open(weight_path, framework="pt") as f:
             lora_keys = [key for key in f.keys() if "lora_" in key]  # noqa: SIM118
+            vision_lora_a_keys = [key for key in lora_keys if "vision_tower" in key and "lora_A" in key]
+            # A LoRA adapter's rank is the first dimension of its lora_A matrix, so the weights
+            # themselves are an authoritative source for it -- no metadata or environment needed.
+            vision_lora_rank = f.get_slice(vision_lora_a_keys[0]).get_shape()[0] if vision_lora_a_keys else None
         has_vision_lora = any("vision_tower" in key for key in lora_keys)
         has_backbone_lora = any("vision_tower" not in key for key in lora_keys)
 
@@ -140,8 +144,8 @@ class HaptileTactileConfig(_model.BaseModelConfig):
             # defaults to "full" (a no-op) unless the serving machine happens to set
             # PI0_UR5E_TACTILE_VISION_TOWER_MODE -- so force it here instead of depending on the
             # serve-time environment matching the training environment.
-            overrides = {"vision_tower_mode": "lora"}
-            overrides.update(_read_trained_vision_lora_params(pathlib.Path(weight_path).parent))
+            overrides = {"vision_tower_mode": "lora", "vision_lora_rank": vision_lora_rank}
+            overrides.update(_read_trained_vision_lora_alpha(pathlib.Path(weight_path).parent))
             model_config = _dc.replace(self, **overrides)
 
         model = HaptileTactilePI0Pytorch(config=model_config)
@@ -162,37 +166,33 @@ class HaptileTactileConfig(_model.BaseModelConfig):
         return model
 
 
-def _read_trained_vision_lora_params(checkpoint_dir) -> dict:
-    """Reads the vision-tower LoRA rank/alpha the checkpoint was actually trained with.
+def _read_trained_vision_lora_alpha(checkpoint_dir) -> dict:
+    """Reads the vision-tower LoRA alpha the checkpoint was actually trained with.
 
-    Both must match training, and neither is fully recoverable from the weights: a wrong rank
-    changes the adapter shapes and fails the load loudly, but a wrong alpha only rescales them,
-    so it loads cleanly and silently changes what the policy outputs. metadata.pt (written
-    alongside model.safetensors by train_haptile_tactile_pytorch.py's save_checkpoint) records
-    the training config, which is a more reliable source than serve-time environment variables.
+    Alpha is the one adapter hyperparameter that can't be recovered from the weights: it only
+    scales the adapter output (by alpha/rank), so unlike rank it leaves no trace in any tensor's
+    shape. A wrong rank fails the load loudly; a wrong alpha loads cleanly and silently changes
+    what the policy outputs. metadata.pt (written alongside model.safetensors by
+    train_haptile_tactile_pytorch.py's save_checkpoint) records the training config, which is a
+    more reliable source than serve-time environment variables.
 
     Falls back to {} -- i.e. whatever the serving config already holds -- if metadata.pt is
-    absent (a partially copied checkpoint) or unreadable (it is a pickle, so it can fail to load
-    against a different openpi revision than the one that wrote it).
+    absent (a partially copied checkpoint) or unreadable. It is a pickle of the whole TrainConfig,
+    so reading it needs openpi's own dependencies (jax/flax included) importable in the serving
+    process, which holds when serving through openpi's venv but not everywhere.
     """
     import logging
 
     metadata_path = checkpoint_dir / "metadata.pt"
     if not metadata_path.exists():
-        logging.warning("No metadata.pt next to the checkpoint; using the config's vision LoRA rank/alpha.")
+        logging.warning("No metadata.pt next to the checkpoint; using the config's vision LoRA alpha.")
         return {}
 
     import torch
 
     try:
         metadata = torch.load(metadata_path, map_location="cpu", weights_only=False)
-        trained_model_config = metadata["config"]["model"]
+        return {"vision_lora_alpha": metadata["config"]["model"]["vision_lora_alpha"]}
     except Exception:
-        logging.exception("Could not read metadata.pt; using the config's vision LoRA rank/alpha.")
+        logging.exception("Could not read metadata.pt; using the config's vision LoRA alpha.")
         return {}
-
-    return {
-        field: trained_model_config[field]
-        for field in ("vision_lora_rank", "vision_lora_alpha")
-        if field in trained_model_config
-    }
