@@ -107,10 +107,92 @@ class HaptileTactileConfig(_model.BaseModelConfig):
         raise NotImplementedError("HaptileTactileConfig only supports the PyTorch backend; use load_pytorch.")
 
     def load_pytorch(self, train_config, weight_path: str):
+        """Rebuilds the architecture the checkpoint was saved with, then loads it.
+
+        A checkpoint trained with LoRA carries peft-injected parameter names
+        ("...q_proj.base_layer.weight", "...q_proj.lora_A.default.weight") rather than the plain
+        "...q_proj.weight" a freshly-constructed model has, so loading it into a bare model fails
+        on every renamed and every extra key. train_haptile_tactile_pytorch.py applies LoRA itself
+        (after loading pretrained weights); this is the serving-side counterpart of that sequence.
+
+        Whether to apply LoRA is decided from the checkpoint's own keys rather than from this
+        config: the tactile TrainConfig always names the "_lora" gemma variants, but training only
+        actually applies LoRA when --pytorch_weight_path was given, so the config says what *could*
+        have been adapted, not what this particular run did.
+        """
+        import dataclasses as _dc
+        import logging
+        import pathlib
+
+        import safetensors
         import safetensors.torch
 
         from openpi.models_pytorch.haptile_tactile_pytorch import HaptileTactilePI0Pytorch
 
-        model = HaptileTactilePI0Pytorch(config=train_config.model)
+        with safetensors.safe_open(weight_path, framework="pt") as f:
+            lora_keys = [key for key in f.keys() if "lora_" in key]  # noqa: SIM118
+        has_vision_lora = any("vision_tower" in key for key in lora_keys)
+        has_backbone_lora = any("vision_tower" not in key for key in lora_keys)
+
+        model_config = self
+        if has_vision_lora:
+            # configure_vision_tower_training() reads vision_tower_mode off the config, which
+            # defaults to "full" (a no-op) unless the serving machine happens to set
+            # PI0_UR5E_TACTILE_VISION_TOWER_MODE -- so force it here instead of depending on the
+            # serve-time environment matching the training environment.
+            overrides = {"vision_tower_mode": "lora"}
+            overrides.update(_read_trained_vision_lora_params(pathlib.Path(weight_path).parent))
+            model_config = _dc.replace(self, **overrides)
+
+        model = HaptileTactilePI0Pytorch(config=model_config)
+        if has_backbone_lora:
+            model.apply_lora_to_backbone()
+        if has_vision_lora:
+            model.configure_vision_tower_training()
+        if lora_keys:
+            logging.info(
+                "Rebuilt LoRA adapters before loading (backbone=%s, vision_tower=%s, rank=%s, alpha=%s)",
+                has_backbone_lora,
+                has_vision_lora,
+                model_config.vision_lora_rank,
+                model_config.vision_lora_alpha,
+            )
+
         safetensors.torch.load_model(model, weight_path)
         return model
+
+
+def _read_trained_vision_lora_params(checkpoint_dir) -> dict:
+    """Reads the vision-tower LoRA rank/alpha the checkpoint was actually trained with.
+
+    Both must match training, and neither is fully recoverable from the weights: a wrong rank
+    changes the adapter shapes and fails the load loudly, but a wrong alpha only rescales them,
+    so it loads cleanly and silently changes what the policy outputs. metadata.pt (written
+    alongside model.safetensors by train_haptile_tactile_pytorch.py's save_checkpoint) records
+    the training config, which is a more reliable source than serve-time environment variables.
+
+    Falls back to {} -- i.e. whatever the serving config already holds -- if metadata.pt is
+    absent (a partially copied checkpoint) or unreadable (it is a pickle, so it can fail to load
+    against a different openpi revision than the one that wrote it).
+    """
+    import logging
+
+    metadata_path = checkpoint_dir / "metadata.pt"
+    if not metadata_path.exists():
+        logging.warning("No metadata.pt next to the checkpoint; using the config's vision LoRA rank/alpha.")
+        return {}
+
+    import torch
+
+    try:
+        metadata = torch.load(metadata_path, map_location="cpu", weights_only=False)
+        trained_model_config = metadata["config"]["model"]
+    except Exception:
+        logging.exception("Could not read metadata.pt; using the config's vision LoRA rank/alpha.")
+        return {}
+
+    return {
+        field: trained_model_config[field]
+        for field in ("vision_lora_rank", "vision_lora_alpha")
+        if field in trained_model_config
+    }

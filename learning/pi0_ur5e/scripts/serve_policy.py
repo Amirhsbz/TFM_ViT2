@@ -55,17 +55,28 @@ def main() -> None:
     parser.add_argument("--default-prompt", default="pick up the paper cup and place it on the target")
     parser.add_argument("--record", default="false")
     parser.add_argument("--dry-run", default="false")
+    parser.add_argument("--use-tactile-input", default="true")
     args = parser.parse_args()
 
-    subprocess.run(
-        [
-            sys.executable,
-            str(Path(__file__).with_name("install_openpi_config.py")),
-            "--openpi-root",
-            str(args.openpi_root),
-        ],
-        check=True,
-    )
+    # HaptileTactilePI0Pytorch configs read their own PI0_UR5E_TACTILE_* environment variables and
+    # live in files that install_openpi_config.py doesn't install, so serving one needs a second
+    # installer and a separate env block. Keyed off the config name so the plain pi0_ur5e_cup
+    # serving path stays exactly as it was.
+    is_tactile = args.config_name.endswith("_tactile")
+
+    installers = ["install_openpi_config.py"]
+    if is_tactile:
+        installers.append("install_openpi_pytorch_patch.py")
+    for installer in installers:
+        subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).with_name(installer)),
+                "--openpi-root",
+                str(args.openpi_root),
+            ],
+            check=True,
+        )
     env = os.environ.copy()
     if args.dataset_root is not None:
         env["PI0_UR5E_LEROBOT_REPO_ID"] = str(args.dataset_root.resolve())
@@ -87,6 +98,27 @@ def main() -> None:
     asset_id = args.asset_id or infer_asset_id(checkpoint_dir)
     if asset_id is not None:
         env["PI0_UR5E_ASSET_ID"] = asset_id
+
+    if is_tactile:
+        for name in (
+            "LEROBOT_REPO_ID",
+            "STATE_DIM",
+            "MAX_TOKEN_LEN",
+            "PI05",
+            "USE_DELTA_ACTIONS",
+            "CAMERA_PADDING",
+            "ASSET_ID",
+        ):
+            if (value := env.get(f"PI0_UR5E_{name}")) is not None:
+                env[f"PI0_UR5E_TACTILE_{name}"] = value
+        env["PI0_UR5E_TACTILE_USE_TACTILE_INPUT"] = str(args.use_tactile_input).lower()
+        # The trained checkpoint already carries the fine-tuned tactile encoder, so fetching the
+        # pretrained T3 checkpoint here would only download weights that are immediately
+        # overwritten -- and would make serving depend on network access.
+        env["PI0_UR5E_TACTILE_LOAD_T3_CHECKPOINT"] = "false"
+        # vision_tower_mode / vision LoRA rank / alpha are deliberately not set here:
+        # HaptileTactileConfig.load_pytorch reconstructs those from the checkpoint itself
+        # (its LoRA keys, plus the training config recorded in metadata.pt).
 
     uv = find_uv()
     command = [
