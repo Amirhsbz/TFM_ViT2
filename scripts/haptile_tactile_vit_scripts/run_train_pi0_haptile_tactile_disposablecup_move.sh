@@ -1,11 +1,11 @@
 #!/bin/bash -l
 
-#SBATCH --job-name=train_pi0_haptile_tactile
+#SBATCH --job-name=train_pi0_haptile_tactile_disposableCup_move
 #SBATCH --gres=gpu:1
 #SBATCH --constraint="a100_40g|h200|a100_80g|l40s"
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=24:00:00
+#SBATCH --time=30:00:00
 #SBATCH --output=/scratch/users/k2691893/projects/tele-gsy/script_results/%x_%j.out
 #SBATCH --error=/scratch/users/k2691893/projects/tele-gsy/script_results/%x_%j.err
 # CHANGE_ME: add --account/--qos/--exclude directives to match your cluster's current
@@ -50,8 +50,8 @@ set -e
 
 PROJECT_ROOT=/scratch/grp/luo/Amir/TFM_ViT2                # e.g. /scratch/grp/luo/<you>/project/tele-gsy
 OPENPI_ROOT=/scratch/users/k2691893/projects/openpi                  # e.g. /scratch/grp/luo/<you>/project/openpi
-DATASET_NAME=wipe_board                # must match run_convert_pi0_lerobot_tactile_raw.sh's DATASET_NAME
-DEFAULT_PROMPT="Grab the sponge, wipe the markers on the white board and put the sponge back"            # must match run_convert_pi0_lerobot_tactile_raw.sh's DEFAULT_PROMPT
+DATASET_NAME=grab_03_disposableCup_move                # must match run_convert_pi0_lerobot_tactile_raw.sh's DATASET_NAME
+DEFAULT_PROMPT="Lift the disposable paper cup and place it on the other side of the table"            # must match run_convert_pi0_lerobot_tactile_raw.sh's DEFAULT_PROMPT
 EXP_NAME=${DATASET_NAME}_haptile_tactileexpert_vit                    # e.g. ${DATASET_NAME}_haptile_tactile
 
 LEROBOT_REPO_ID=local/pi0_ur5e_${DATASET_NAME}_tactile_raw
