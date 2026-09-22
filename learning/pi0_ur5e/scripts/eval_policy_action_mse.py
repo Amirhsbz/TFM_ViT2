@@ -226,17 +226,28 @@ def main() -> None:
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--num-steps", type=int, default=10, help="Diffusion sampling steps used by policy.sample_actions.")
     parser.add_argument("--default-prompt", default=None)
+    parser.add_argument("--use-tactile-input", default="true")
     args = parser.parse_args()
 
-    subprocess.run(
-        [
-            sys.executable,
-            str(Path(__file__).with_name("install_openpi_config.py")),
-            "--openpi-root",
-            str(args.openpi_root),
-        ],
-        check=True,
-    )
+    # HaptileTactilePI0Pytorch configs read their own PI0_UR5E_TACTILE_* environment variables and
+    # live in files install_openpi_config.py doesn't install, so evaluating one needs a second
+    # installer and a separate env block (same split as serve_policy.py). Keyed off the config
+    # name so the plain pi0_ur5e_cup path stays exactly as it was.
+    is_tactile = args.config_name.endswith("_tactile")
+
+    installers = ["install_openpi_config.py"]
+    if is_tactile:
+        installers.append("install_openpi_pytorch_patch.py")
+    for installer in installers:
+        subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).with_name(installer)),
+                "--openpi-root",
+                str(args.openpi_root),
+            ],
+            check=True,
+        )
 
     dataset_root = args.dataset_root.resolve()
     checkpoint_dir = args.checkpoint_dir.resolve()
@@ -254,6 +265,16 @@ def main() -> None:
     env["PI0_UR5E_ACTION_FORMAT"] = args.action_format or read_action_format(dataset_root) or "joint_position_gripper"
     if (state_dim := read_state_dim(dataset_root)) is not None:
         env["PI0_UR5E_STATE_DIM"] = str(state_dim)
+
+    if is_tactile:
+        for name in ("LEROBOT_REPO_ID", "ASSET_ID", "ACTION_FORMAT", "STATE_DIM"):
+            if (value := env.get(f"PI0_UR5E_{name}")) is not None:
+                env[f"PI0_UR5E_TACTILE_{name}"] = value
+        env["PI0_UR5E_TACTILE_USE_TACTILE_INPUT"] = str(args.use_tactile_input).lower()
+        # The checkpoint already carries the fine-tuned tactile encoder, so fetching the pretrained
+        # T3 checkpoint would only download weights that are immediately overwritten.
+        env["PI0_UR5E_TACTILE_LOAD_T3_CHECKPOINT"] = "false"
+
     env.setdefault("HF_DATASETS_CACHE", "/tmp/hf_datasets_cache")
     env.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.9")
 
