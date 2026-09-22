@@ -127,7 +127,13 @@ def main():
         "0.6-1.0": new_accumulator(action_dim),
     }
 
-    for i in range(sample_count):
+    # Spread the sampled frames evenly over the whole dataset rather than taking the first
+    # sample_count of them. LeRobot stores frames in episode order, so a prefix only covers the
+    # start of the first episode or two -- with --max-samples 200 against ~333-frame episodes,
+    # every sample came from the first 60% of episode 0 and the late-episode phase scored nothing.
+    eval_indices = [round(i * (len(dataset) - 1) / max(sample_count - 1, 1)) for i in range(sample_count)]
+
+    for evaluated, i in enumerate(eval_indices, start=1):
         sample = dataset[i]
         episode_index = scalar_int(sample["episode_index"])
         frame_index = scalar_int(sample["frame_index"])
@@ -154,8 +160,8 @@ def main():
         update_accumulator(overall, sq)
         update_accumulator(phases[phase], sq)
 
-        if (i + 1) % 25 == 0 or i + 1 == sample_count:
-            print(f"evaluated {i + 1}/{sample_count}", flush=True)
+        if evaluated % 25 == 0 or evaluated == sample_count:
+            print(f"evaluated {evaluated}/{sample_count}", flush=True)
 
     if overall["total_count"] == 0:
         raise SystemExit("No valid action chunks were evaluated.")
