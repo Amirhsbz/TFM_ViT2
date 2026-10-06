@@ -50,7 +50,7 @@ set -e
 
 PROJECT_ROOT=/scratch/grp/luo/Amir/TFM_ViT2                # e.g. /scratch/grp/luo/<you>/project/tele-gsy
 OPENPI_ROOT=/scratch/users/k2691893/projects/openpi                  # e.g. /scratch/grp/luo/<you>/project/openpi
-DATASET_NAME=wipe_board                # must match run_convert_pi0_lerobot_tactile_raw.sh's DATASET_NAME
+DATASET_NAME=wipe_board_aug                # must match run_convert_pi0_lerobot_tactile_raw.sh's DATASET_NAME
 DEFAULT_PROMPT="Grab the sponge, wipe the markers on the white board and put the sponge back"            # must match run_convert_pi0_lerobot_tactile_raw.sh's DEFAULT_PROMPT
 EXP_NAME=${DATASET_NAME}_haptile_tactileexpert_vit                    # e.g. ${DATASET_NAME}_haptile_tactile
 
@@ -59,8 +59,8 @@ DATASET_ROOT=${PROJECT_ROOT}/outputs/${DATASET_NAME}_lerobot_tactile_raw
 OUTPUT_DIR=${PROJECT_ROOT}/outputs/pi0_${DATASET_NAME}_haptile_tactile
 
 WANDB=true
-OVERWRITE=false                        # set RESUME=true (and OVERWRITE irrelevant) to resume a crashed run
-RESUME=true
+OVERWRITE=true                        # set RESUME=true (and OVERWRITE irrelevant) to resume a crashed run
+RESUME=false
 STEPS=30000
 BATCH_SIZE=16
 SAVE_INTERVAL=3000                    # checkpoint every N steps; train_haptile_tactile_pytorch.py
@@ -120,6 +120,10 @@ mkdir -p "$(dirname "${LINK_PATH}")"
 rm -f "${LINK_PATH}"
 ln -s "${DATASET_ROOT}" "${LINK_PATH}"
 export HF_LEROBOT_HOME="${LEROBOT_HOME_DIR}"
+
+export HF_DATASETS_CACHE="${PROJECT_ROOT}/shared/hf_datasets_cache"
+mkdir -p "${HF_DATASETS_CACHE}"
+
 
 export PI0_UR5E_TACTILE_LEROBOT_REPO_ID="${LEROBOT_REPO_ID}"
 export PI0_UR5E_TACTILE_ASSET_ID="${LEROBOT_REPO_ID}"

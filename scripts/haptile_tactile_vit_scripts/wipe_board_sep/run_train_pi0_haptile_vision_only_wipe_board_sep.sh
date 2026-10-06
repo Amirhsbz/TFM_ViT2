@@ -1,6 +1,6 @@
 #!/bin/bash -l
 
-#SBATCH --job-name=train_pi0_haptile_vision_only
+#SBATCH --job-name=train_pi0_haptile_vision_only_wipe_board_sep
 #SBATCH --gres=gpu:1
 #SBATCH --constraint="a100_40g|h200|a100_80g|l40s"
 #SBATCH --cpus-per-task=16
@@ -57,13 +57,13 @@ set -e
 
 PROJECT_ROOT=/scratch/grp/luo/Amir/TFM_ViT2                # e.g. /scratch/grp/luo/<you>/project/tele-gsy
 OPENPI_ROOT=/scratch/users/k2691893/projects/openpi                  # e.g. /scratch/grp/luo/<you>/project/openpi
-DATASET_NAME=wipe_board_aug                # must match run_convert_pi0_lerobot_tactile_raw.sh's DATASET_NAME
+DATASET_NAME=wipe_board_sep              # must match run_convert_pi0_lerobot_tactile_raw.sh's DATASET_NAME
 DEFAULT_PROMPT="Grab the sponge, wipe the markers on the white board and put the sponge back"            # must match run_convert_pi0_lerobot_tactile_raw.sh's DEFAULT_PROMPT
 EXP_NAME=${DATASET_NAME}_haptile_vision_only                    # e.g. ${DATASET_NAME}_haptile_vision_only
 
-LEROBOT_REPO_ID=local/pi0_ur5e_${DATASET_NAME}_tactile_raw
-DATASET_ROOT=${PROJECT_ROOT}/outputs/${DATASET_NAME}_lerobot_tactile_raw
-OUTPUT_DIR=${PROJECT_ROOT}/outputs/pi0_${DATASET_NAME}_haptile_vision_only
+LEROBOT_REPO_ID=local/pi0_ur5e_${DATASET_NAME}_tactile_raw_train
+DATASET_ROOT=${PROJECT_ROOT}/outputs/${DATASET_NAME}_lerobot_tactile_raw_train
+OUTPUT_DIR=${PROJECT_ROOT}/outputs/pi0_${DATASET_NAME}_haptile_vision_only_train
 # ^ deliberately a different OUTPUT_DIR from run_train_pi0_haptile_tactile.sh's (which is
 # pi0_${DATASET_NAME}_haptile_tactile) so the two experiments' checkpoints/logs/assets never
 # collide even when run against the same DATASET_NAME.

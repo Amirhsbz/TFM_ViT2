@@ -1,6 +1,6 @@
 #!/bin/bash -l
 
-#SBATCH --job-name=convert_pi0_haptile_tactile
+#SBATCH --job-name=convert_pi0_haptile_tactile_wipe_board_sep_postgrasp
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
 #SBATCH --mem=64G
@@ -25,10 +25,10 @@ set -e
 
 PROJECT_ROOT=/scratch/grp/luo/Amir/TFM_ViT2               # e.g. /scratch/grp/luo/<you>/project/tele-gsy
 OPENPI_ROOT=/scratch/users/k2691893/projects/openpi               # e.g. /scratch/grp/luo/<you>/project/openpi
-DATASET_NAME=wipe_board_aug              # e.g. fold_Tshirt
-OUTPUT_NAME=${DATASET_NAME}_lerobot_tactile_raw
-REPO_ID=local/pi0_ur5e_${DATASET_NAME}_tactile_raw
-DEFAULT_PROMPT="Grab the sponge, wipe the markers on the white board and put the sponge back"          # e.g. "Fold the t-shirt in half"
+DATASET_NAME=wipe_board_sep_postgrasp              # e.g. fold_Tshirt
+OUTPUT_NAME=${DATASET_NAME}_lerobot_tactile_raw_train
+REPO_ID=local/pi0_ur5e_${DATASET_NAME}_tactile_raw_train
+DEFAULT_PROMPT="Wipe the markers on the white board and put the sponge back"          # e.g. "Fold the t-shirt in half"
 
 INPUT_ROOT=/scratch/grp/luo/shiyi/project/tele-gsy/data_split/${DATASET_NAME}_train
 OUTPUT_ROOT=${PROJECT_ROOT}/outputs/${OUTPUT_NAME}
