@@ -136,6 +136,54 @@ def get_model_parameters(model):
     )
 
 
+class Float32MasterWeights:
+    """Keeps an fp32 master copy of every trainable bf16 parameter, and steps the optimizer on it.
+
+    With pytorch_training_precision="bfloat16" the backbone -- including LoRA adapters, the image
+    projector, and the vision tower / tactile expert when those train -- is stored in bf16, whose
+    ~8-bit mantissa cannot represent an Adam step (roughly the learning rate, 2.5e-5 decaying to
+    2.5e-6) relative to typical weights: most updates round away, increasingly so as the LR decays.
+    openpi's JAX trainer avoids this by keeping trainable params in fp32 and only frozen ones in
+    bf16 (scripts/train.py); this reproduces those semantics without touching the model: the
+    forward pass still runs on the bf16 weights, while updates accumulate in fp32 and are copied
+    back after every step.
+
+    Trainable params that are already fp32 (the action/state projections, the tactile encoder) are
+    optimized directly, with no master copy.
+    """
+
+    def __init__(self, model):
+        self.pairs = []
+        self.optimizer_params = []
+        for param in model.parameters():
+            if not param.requires_grad:
+                continue
+            if param.dtype == torch.float32:
+                self.optimizer_params.append(param)
+            else:
+                master = torch.nn.Parameter(param.detach().float().clone())
+                self.pairs.append((param, master))
+                self.optimizer_params.append(master)
+
+    def copy_grads_to_masters(self):
+        for param, master in self.pairs:
+            master.grad = None if param.grad is None else param.grad.float()
+
+    @torch.no_grad()
+    def copy_masters_to_model(self):
+        for param, master in self.pairs:
+            param.copy_(master)
+
+    @torch.no_grad()
+    def sync_masters_from_model(self):
+        """After load_checkpoint overwrites the bf16 weights, the masters must follow them."""
+        for param, master in self.pairs:
+            master.copy_(param)
+
+    def num_master_params(self):
+        return sum(master.numel() for _, master in self.pairs)
+
+
 # Number of most-recent checkpoints to keep in full (model + optimizer state), so --resume always
 # has an optimizer state to load from. Every other checkpoint is pruned by _prune_old_checkpoints:
 # kept model-only (optimizer.pt dropped) if it lands on a config.keep_period milestone, deleted
@@ -509,9 +557,17 @@ def train_loop(config: _config.TrainConfig):
     decay_steps = config.lr_schedule.decay_steps
     end_lr = config.lr_schedule.decay_lr
 
+    # Built after LoRA/vision-tower setup, so it sees the final set of trainable parameters.
+    masters = Float32MasterWeights(model)
+    if is_main:
+        logging.info(
+            f"fp32 master weights for {masters.num_master_params() / 1e6:.1f}M trainable bf16 params; "
+            f"{len(masters.optimizer_params)} trainable tensors total"
+        )
+
     # Create optimizer with config parameters
     optim = torch.optim.AdamW(
-        model.parameters(),
+        masters.optimizer_params,
         lr=peak_lr,
         betas=(config.optimizer.b1, config.optimizer.b2),
         eps=config.optimizer.eps,
@@ -522,6 +578,7 @@ def train_loop(config: _config.TrainConfig):
     global_step = 0
     if resuming:
         global_step = load_checkpoint(model, optim, config.checkpoint_dir, device)
+        masters.sync_masters_from_model()
         logging.info(f"Resumed training from step {global_step}")
 
     def lr_schedule(step: int):
@@ -597,11 +654,15 @@ def train_loop(config: _config.TrainConfig):
             if global_step < 5 and is_main and torch.cuda.is_available():
                 log_memory_usage(device, global_step, "after_backward")
 
-            # Gradient clipping
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.optimizer.clip_gradient_norm)
+            # Gradient clipping, on the fp32 master gradients the optimizer actually steps on
+            masters.copy_grads_to_masters()
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                masters.optimizer_params, max_norm=config.optimizer.clip_gradient_norm
+            )
 
-            # Optimizer step
+            # Optimizer step on the fp32 masters, then refresh the bf16 weights the forward pass uses
             optim.step()
+            masters.copy_masters_to_model()
             optim.zero_grad(set_to_none=True)
 
             # Clear gradients more aggressively
