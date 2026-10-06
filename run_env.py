@@ -1253,6 +1253,8 @@ class Args:
     pi0_eef_rotation_scale: float = 1.0
     safe_max_joint_delta: float = 0.03
     safe_max_hand_delta: float = 0.03
+    skip_reset: bool = False
+    """Keep the robot where it is instead of moving to reset_joints at startup and at each trajectory start."""
 
     temporal_ensemble_mode: str = "avg"
     temporal_ensemble_act_tau: float = 0.5
@@ -1434,10 +1436,13 @@ def main(args):
     curr_joints = env.get_obs()["joint_positions"]
     print("Current joints:", curr_joints)
     print("Reset joints:", reset_joints)
-    max_delta = (np.abs(curr_joints - reset_joints)).max()
-    steps = min(int(max_delta / 0.01), 20)
-    for jnt in np.linspace(curr_joints, reset_joints, steps):
-        env.step(jnt)
+    if args.skip_reset:
+        print("skip_reset=True: staying at current joints")
+    else:
+        max_delta = (np.abs(curr_joints - reset_joints)).max()
+        steps = min(int(max_delta / 0.01), 20)
+        for jnt in np.linspace(curr_joints, reset_joints, steps):
+            env.step(jnt)
 
     obs = env.get_obs()
     _apply_tactile_crop_configs(obs, tactile_crop_configs, tactile_crop_input_size)
@@ -1598,12 +1603,13 @@ def main(args):
                     time.sleep(0.05)
 
             # Move to initial position
-            print_color("\nMoving to initial position...", color="cyan")
-            curr_joints = env.get_obs()["joint_positions"]
-            max_delta = (np.abs(curr_joints - reset_joints)).max()
-            steps = min(int(max_delta / 0.01), 20)
-            for jnt in np.linspace(curr_joints, reset_joints, steps):
-                env.step(jnt)
+            if not args.skip_reset:
+                print_color("\nMoving to initial position...", color="cyan")
+                curr_joints = env.get_obs()["joint_positions"]
+                max_delta = (np.abs(curr_joints - reset_joints)).max()
+                steps = min(int(max_delta / 0.01), 20)
+                for jnt in np.linspace(curr_joints, reset_joints, steps):
+                    env.step(jnt)
 
             obs = env.get_obs()
             _reset_agent_temporal_state(agent)
