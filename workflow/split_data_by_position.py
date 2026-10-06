@@ -28,6 +28,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from split_data import is_valid_trajectory_dir  # noqa: E402
 
 
+def grasp_index(gripper):
+    """Frame index of the first large gripper transition, i.e. the grasp, or None if there is none.
+
+    Assumes the episode starts with the gripper open: on an episode that starts already holding
+    the object (such as a post-grasp trimmed one), the first large transition is the release.
+    """
+    span = gripper.max() - gripper.min()
+    if span < 1e-6 or len(gripper) < 5:
+        return None
+    moved = np.abs(gripper - gripper[0]) > 0.5 * span
+    if not moved.any():
+        return None
+    return int(np.argmax(moved))
+
+
 def grasp_position(h5_path):
     """End-effector xyz at the first large gripper transition, i.e. the grasp.
 
@@ -40,13 +55,8 @@ def grasp_position(h5_path):
         gripper = np.asarray(f["frames/gripper_position"])[:, 0]
         ee_xyz = np.asarray(f["frames/ee_pos_quat"])[:, :3]
 
-    span = gripper.max() - gripper.min()
-    if span < 1e-6 or len(gripper) < 5:
-        return None
-    moved = np.abs(gripper - gripper[0]) > 0.5 * span
-    if not moved.any():
-        return None
-    return ee_xyz[int(np.argmax(moved))]
+    index = grasp_index(gripper)
+    return None if index is None else ee_xyz[index]
 
 
 def describe(label, positions, axis_index):
