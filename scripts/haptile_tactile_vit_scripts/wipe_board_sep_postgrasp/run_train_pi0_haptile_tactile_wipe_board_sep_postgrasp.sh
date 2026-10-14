@@ -1,6 +1,6 @@
 #!/bin/bash -l
 
-#SBATCH --job-name=train_pi0_haptile_tactile_wipe_board_sep_postgrasp
+#SBATCH --job-name=train_pi0_haptile_tactile_wipe_board_sep_postgrasp_f32
 #SBATCH --gres=gpu:1
 #SBATCH --constraint="a100_40g|h200|a100_80g|l40s"
 #SBATCH --cpus-per-task=16
@@ -52,11 +52,11 @@ PROJECT_ROOT=/scratch/grp/luo/Amir/TFM_ViT2                # e.g. /scratch/grp/l
 OPENPI_ROOT=/scratch/users/k2691893/projects/openpi                  # e.g. /scratch/grp/luo/<you>/project/openpi
 DATASET_NAME=wipe_board_sep_postgrasp               # must match run_convert_pi0_lerobot_tactile_raw.sh's DATASET_NAME
 DEFAULT_PROMPT="Wipe the markers on the white board and put the sponge back"            # must match run_convert_pi0_lerobot_tactile_raw.sh's DEFAULT_PROMPT
-EXP_NAME=${DATASET_NAME}_haptile_tactileexpert_vit                    # e.g. ${DATASET_NAME}_haptile_tactile
+EXP_NAME=${DATASET_NAME}_haptile_tactileexpert_vit_f32                    # e.g. ${DATASET_NAME}_haptile_tactile
 
 LEROBOT_REPO_ID=local/pi0_ur5e_${DATASET_NAME}_tactile_raw_train
 DATASET_ROOT=${PROJECT_ROOT}/outputs/${DATASET_NAME}_lerobot_tactile_raw_train
-OUTPUT_DIR=${PROJECT_ROOT}/outputs/pi0_${DATASET_NAME}_haptile_tactile_train
+OUTPUT_DIR=${PROJECT_ROOT}/outputs/pi0_${DATASET_NAME}_haptile_tactile_train_f32
 
 WANDB=true
 OVERWRITE=true                        # set RESUME=true (and OVERWRITE irrelevant) to resume a crashed run

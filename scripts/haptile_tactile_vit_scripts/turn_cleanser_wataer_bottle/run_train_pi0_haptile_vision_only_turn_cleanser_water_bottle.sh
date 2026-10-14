@@ -1,6 +1,6 @@
 #!/bin/bash -l
 
-#SBATCH --job-name=train_pi0_haptile_vision_only_turn_cleanser_water_bottle
+#SBATCH --job-name=train_pi0_haptile_vision_only_turn_cleanser_water_bottle_fp32
 #SBATCH --gres=gpu:1
 #SBATCH --constraint="a100_40g|h200|a100_80g|l40s"
 #SBATCH --cpus-per-task=16

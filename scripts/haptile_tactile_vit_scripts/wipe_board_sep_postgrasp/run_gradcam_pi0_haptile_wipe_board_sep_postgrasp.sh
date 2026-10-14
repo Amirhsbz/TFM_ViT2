@@ -23,15 +23,15 @@ PROJECT_ROOT=/scratch/grp/luo/Amir/TFM_ViT2
 OPENPI_ROOT=/scratch/users/k2691893/projects/openpi
 DATASET_NAME=wipe_board_sep_postgrasp
 DEFAULT_PROMPT="Wipe the markers on the white board and put the sponge back"   # must match the conversion prompt
-EXP_NAME=${DATASET_NAME}_haptile_tactileexpert_vit
+EXP_NAME=${DATASET_NAME}_haptile_tactileexpert_vit_2
 STEP=30000
 
-CHECKPOINT_DIR=${PROJECT_ROOT}/outputs/pi0_${DATASET_NAME}_haptile_tactile_train/checkpoints/pi0_ur5e_cup_tactile/${EXP_NAME}/${STEP}
-INPUT_ROOT=/scratch/grp/luo/shiyi/project/tele-gsy/data_split/${DATASET_NAME}_test   # or a folder of rollouts
+CHECKPOINT_DIR=/scratch/grp/luo/Amir/TFM_ViT2/outputs/pi0_wipe_board_sep_postgrasp_haptile_tactile_train/checkpoints/pi0_ur5e_cup_tactile/wipe_board_sep_postgrasp_haptile_tactileexpert_vit/30000
+INPUT_ROOT=/scratch/grp/luo/shiyi/project/tele-gsy/data_split/wipe_board_sep_train/0928_113959   # or a folder of rollouts
 OUTPUT_DIR=${PROJECT_ROOT}/outputs/gradcam/${EXP_NAME}_${STEP}
 
 TARGET=action          # action = what drives the predicted chunk; demo = what pulls it towards the recording
-STRIDE=1               # process every Nth frame
+STRIDE=5               # process every Nth frame
 MAX_EPISODES=5         # empty for all
 
 cd "${OPENPI_ROOT}"

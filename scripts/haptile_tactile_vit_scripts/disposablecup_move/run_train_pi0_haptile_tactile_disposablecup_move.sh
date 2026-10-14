@@ -1,6 +1,6 @@
 #!/bin/bash -l
 
-#SBATCH --job-name=train_pi0_haptile_tactile_disposableCup_move
+#SBATCH --job-name=train_pi0_haptile_tactile_disposableCup_move_fp32
 #SBATCH --gres=gpu:1
 #SBATCH --constraint="a100_40g|h200|a100_80g|l40s"
 #SBATCH --cpus-per-task=16
