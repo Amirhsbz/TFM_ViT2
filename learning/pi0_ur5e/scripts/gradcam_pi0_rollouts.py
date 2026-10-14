@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Grad-CAM + action-to-image attention maps for HaptileTactilePI0Pytorch on recorded trajectory.h5 episodes.
 
-For every frame of every episode it asks two questions of the SigLIP image tokens the VLM sees:
+For every frame of every episode it asks two questions of the SigLIP image tokens the VLM sees
+(and, for tactile checkpoints, of the two tactile sensors' images -- see "Tactile" below):
 
   * Grad-CAM: which image patches does the predicted action chunk depend on? The chunk comes from
     the model's real flow-matching sampler (sample_actions, KV cache and all, fixed seed noise),
@@ -14,14 +15,20 @@ For every frame of every episode it asks two questions of the SigLIP image token
               whose features pull the prediction towards what the demonstrator did.
   * Attention: how much attention the 50 action-expert query tokens put on each image patch,
     averaged over heads, layers and denoising steps, plus the share of that attention that lands
-    on each modality (each camera, language, tactile, state/action tokens).
+    on each modality (each camera, language, each tactile sensor, state/action tokens).
+
+Tactile: each sensor image goes through the T3 ViT, and only its CLS token reaches the tactile
+expert. Grad-CAM is taken on the 14x14 gel-patch tokens entering the ViT's last block (the last
+point where they still feed that CLS token), with the same target and backward pass as the
+cameras. The attention column for tactile rows is that block's CLS->patch attention: which gel
+regions are pooled into the token the policy sees. Tactile rows use their own heatmap scale.
 
 Inputs are built exactly like training data: episodes are read with the same DatasetReader that
 convert_to_lerobot.py uses, images are resized with the same resize_rgb, and the policy's own
 input transforms (delta actions, normalization, tokenization) are applied unchanged.
 
 Outputs, per episode, under <output-dir>/<episode_id>/:
-  gradcam.mp4               rows = cameras; columns = input | Grad-CAM | action->image attention
+  gradcam.mp4               rows = cameras (+ tactile sensors); columns = input | Grad-CAM | attention
   timeline.png              attention share per modality and Grad-CAM mass per camera over time
   gradcam_data.npz          raw maps and per-frame numbers for your own analysis
   summary.json              settings, action MSE vs the recording (input sanity check), shares
@@ -49,9 +56,11 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import textwrap
 
 INNER_FLAG = "--_inside-openpi-env"
 CAMERA_LABELS = {"base_0_rgb": "base", "left_wrist_0_rgb": "wrist", "right_wrist_0_rgb": "right_wrist(pad)"}
+TACTILE_KEYS = ("tactile_left", "tactile_right")
 
 
 def str2bool(value: str) -> bool:
@@ -242,6 +251,40 @@ class ImageTokenTap:
         self.tokens = []
 
 
+class TactileTokenTap:
+    """Forward pre-hook on the last block of the T3 tactile ViT (shared by both sensors, run left
+    then right). The encoder passes only its output CLS token on to the tactile expert, so patch
+    tokens are captured at the input of the last block -- the last place they still feed the CLS
+    token -- as fresh leaves requiring grad. Also records that block's CLS->patch attention, i.e.
+    which gel regions get pooled into the token the tactile expert sees."""
+
+    def __init__(self, vit):
+        self.tokens = []
+        self.cls_attention = []
+        vit.blocks[-1].register_forward_pre_hook(self._hook)
+
+    def _hook(self, block, args):
+        import torch
+
+        tokens = args[0].detach().requires_grad_(True)
+        self.tokens.append(tokens)
+        with torch.no_grad():
+            attn = block.attn
+            x = block.norm1(tokens)
+            batch, length, _ = x.shape
+            qkv = attn.qkv(x).reshape(batch, length, 3, attn.num_heads, attn.head_dim).permute(2, 0, 3, 1, 4)
+            q, k = attn.q_norm(qkv[0]), attn.k_norm(qkv[1])
+            weights = ((q[:, :, :1] * attn.scale) @ k.transpose(-2, -1)).softmax(dim=-1)  # [B, heads, 1, N]
+            cls_to_patches = weights[0, :, 0, 1:].float().mean(dim=0)
+            side = int(round(cls_to_patches.numel() ** 0.5))
+            self.cls_attention.append(cls_to_patches.reshape(side, side).cpu().numpy())
+        return (tokens, *args[1:])
+
+    def reset(self):
+        self.tokens = []
+        self.cls_attention = []
+
+
 def compute_cam(tokens, grads, method: str):
     import torch
 
@@ -276,19 +319,19 @@ def heatmap_overlay(image_rgb, heat, alpha: float, size: int):
     return cv2.addWeighted(cv2.cvtColor(image, cv2.COLOR_RGB2BGR), 1 - alpha, colored, alpha, 0)
 
 
-def render_panel(images, cams, attns, camera_names, header_lines, args):
+def render_panel(images, cams, attns, camera_names, attn_titles, header_lines, args):
     import cv2
     import numpy as np
 
     size = args.display_size
     rows = []
-    for image, cam, attn, name in zip(images, cams, attns, camera_names, strict=True):
+    for image, cam, attn, name, attn_title in zip(images, cams, attns, camera_names, attn_titles, strict=True):
         tiles = [
             cv2.cvtColor(cv2.resize(image, (size, size), interpolation=cv2.INTER_LINEAR), cv2.COLOR_RGB2BGR),
             heatmap_overlay(image, cam, args.alpha, size),
             heatmap_overlay(image, attn, args.alpha, size),
         ]
-        for tile, label in zip(tiles, (name, f"{name} Grad-CAM", f"{name} action->image attn"), strict=True):
+        for tile, label in zip(tiles, (name, f"{name} Grad-CAM", f"{name} {attn_title}"), strict=True):
             cv2.putText(tile, label, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
         rows.append(np.hstack(tiles))
     body = np.vstack(rows)
@@ -298,7 +341,9 @@ def render_panel(images, cams, attns, camera_names, header_lines, args):
     return np.vstack([header, body])
 
 
-def plot_timeline(path: Path, frame_indices, shares, share_names, cam_mass, camera_names, title: str):
+def plot_timeline(path: Path, frame_indices, shares, share_names, mass_groups, title: str):
+    """mass_groups: list of (ylabel, [N, C] Grad-CAM mass, names) -- one subplot each, since
+    SigLIP and T3 token Grad-CAMs are not on comparable scales."""
     try:
         import matplotlib
 
@@ -307,16 +352,17 @@ def plot_timeline(path: Path, frame_indices, shares, share_names, cam_mass, came
     except ImportError:
         print("matplotlib not available; skipping timeline.png")
         return
-    fig, axes = plt.subplots(2, 1, figsize=(11, 6.5), sharex=True)
+    fig, axes = plt.subplots(1 + len(mass_groups), 1, figsize=(11, 3.25 * (1 + len(mass_groups))), sharex=True)
     axes[0].stackplot(frame_indices, shares.T, labels=share_names, alpha=0.85)
     axes[0].set_ylabel("action-token attention share")
     axes[0].set_ylim(0, 1)
     axes[0].legend(loc="upper left", fontsize=8, ncol=len(share_names))
-    for i, name in enumerate(camera_names):
-        axes[1].plot(frame_indices, cam_mass[:, i], label=name)
-    axes[1].set_ylabel("Grad-CAM mass (sum of ReLU map)")
-    axes[1].set_xlabel("frame")
-    axes[1].legend(loc="upper left", fontsize=8)
+    for ax, (ylabel, mass, names) in zip(axes[1:], mass_groups, strict=True):
+        for i, name in enumerate(names):
+            ax.plot(frame_indices, mass[:, i], label=name)
+        ax.set_ylabel(ylabel)
+        ax.legend(loc="upper left", fontsize=8)
+    axes[-1].set_xlabel("frame")
     fig.suptitle(title)
     fig.tight_layout()
     fig.savefig(path, dpi=120)
@@ -360,6 +406,7 @@ def run_inside(args) -> None:
     steps = horizon if args.horizon_steps is None else min(args.horizon_steps, horizon)
 
     tap = ImageTokenTap(model.paligemma_with_expert.paligemma.model.multi_modal_projector)
+    tactile_tap = TactileTokenTap(model.tactile_encoder.vit) if use_tactile else None
     recorder = AttentionRecorder(modeling_gemma, horizon)
     recorder.wrap_denoise_step(model)
     # sample_actions is @torch.no_grad(); its undecorated body gives the identical computation
@@ -424,11 +471,15 @@ def run_inside(args) -> None:
             observation = _model.Observation.from_dict(inputs)
             if camera_keys is None:
                 camera_keys = [k for k in observation.images if bool(observation.image_masks[k].reshape(-1)[0])]
+                if use_tactile:
+                    camera_keys += list(TACTILE_KEYS)
 
             generator = torch.Generator(device=args.device).manual_seed(args.seed)
             noise = torch.randn((1, horizon, action_dim), generator=generator, device=args.device, dtype=torch.float32)
 
             tap.reset()
+            if tactile_tap is not None:
+                tactile_tap.reset()
             recorder.reset()
             with torch.enable_grad():
                 pred_norm = sample_actions(model, args.device, observation, noise=noise, num_steps=args.num_steps).float()
@@ -438,12 +489,22 @@ def run_inside(args) -> None:
                 else:
                     score = -(selected - demo_norm[:, :steps, dims]).pow(2).sum()
                 image_names = list(observation.images)
-                grads = torch.autograd.grad(score, tap.tokens, allow_unused=True)
+                tactile_tokens = tactile_tap.tokens if tactile_tap is not None else []
+                grads = torch.autograd.grad(score, tap.tokens + tactile_tokens, allow_unused=True)
 
             cams = {}
-            for name, tokens, grad in zip(image_names, tap.tokens, grads, strict=True):
+            for name, tokens, grad in zip(image_names, tap.tokens, grads[: len(tap.tokens)], strict=True):
                 side = int(round(tokens.shape[1] ** 0.5))
                 cams[name] = np.zeros((side, side)) if grad is None else compute_cam(tokens, grad, args.cam_method)
+            # Tactile: drop the CLS token, keep the 14x14 gel patches.
+            if tactile_tokens:
+                for name, tokens, grad in zip(TACTILE_KEYS, tactile_tokens, grads[len(tap.tokens) :], strict=True):
+                    side = int(round((tokens.shape[1] - 1) ** 0.5))
+                    cams[name] = (
+                        np.zeros((side, side))
+                        if grad is None
+                        else compute_cam(tokens[:, 1:], grad[:, 1:], args.cam_method)
+                    )
 
             # Split the action rows' attention over [images | language | tactile | suffix].
             attn = recorder.mean()
@@ -460,9 +521,14 @@ def run_inside(args) -> None:
                 shares[CAMERA_LABELS.get(name, name)] = float(segment.sum())
                 start += count
             shares["language"] = float(attn[start : start + lang_len].sum())
-            if tactile_len > 0:
+            if tactile_len == len(TACTILE_KEYS):  # one CLS-pooled token per sensor, left then right
+                for i, name in enumerate(TACTILE_KEYS):
+                    shares[name] = float(attn[prefix_len + i])
+            elif tactile_len > 0:
                 shares["tactile"] = float(attn[prefix_len : prefix_len + tactile_len].sum())
             shares["state+actions"] = float(attn[prefix_len + max(tactile_len, 0) :].sum())
+            if tactile_tap is not None:
+                attn_maps.update(zip(TACTILE_KEYS, tactile_tap.cls_attention, strict=True))
 
             outputs = {
                 "state": np.asarray(inputs["state"][0].detach().cpu()),
@@ -481,7 +547,15 @@ def run_inside(args) -> None:
                     "score": float(score.detach()),
                     "mse": mse,
                     "pred_actions": pred_actions,
-                    "images": {"base_0_rgb": obs["base_rgb"], "left_wrist_0_rgb": obs["wrist_rgb"]},
+                    "images": {
+                        "base_0_rgb": obs["base_rgb"],
+                        "left_wrist_0_rgb": obs["wrist_rgb"],
+                        **(
+                            {"tactile_left": obs["tactile_left_rgb"], "tactile_right": obs["tactile_right_rgb"]}
+                            if use_tactile
+                            else {}
+                        ),
+                    },
                 }
             )
             if (n + 1) % 25 == 0 or n + 1 == len(frame_indices):
@@ -494,17 +568,37 @@ def write_episode_outputs(out_dir: Path, episode, records, camera_keys, args, us
     import cv2
     import numpy as np
 
+    # Cameras and tactile sensors are separate groups: their Grad-CAMs come from different token
+    # spaces (SigLIP vs T3) and their attention maps measure different things, so each group gets
+    # its own heatmap scale. Within a group the scale is shared, so left vs right (or base vs
+    # wrist) stay comparable.
     shown = [k for k in camera_keys if k in records[0]["images"]]
-    labels = [CAMERA_LABELS.get(k, k) for k in shown]
-    cam_stack = np.stack([[r["cams"][k] for k in shown] for r in records])  # [N, C, g, g]
-    attn_stack = np.stack([[r["attn"][k] for k in shown] for r in records])
-    cam_scale = np.maximum(cam_stack.reshape(len(records), -1).max(axis=1), 1e-12)
+    vision_keys = [k for k in shown if k not in TACTILE_KEYS]
+    tactile_keys = [k for k in shown if k in TACTILE_KEYS]
+    groups = [g for g in (vision_keys, tactile_keys) if g]
+
+    def stack(field, keys):
+        return np.stack([[r[field][k] for k in keys] for r in records])  # [N, C, g, g]
+
+    def group_scales(field, keys, percentile):
+        values = stack(field, keys).reshape(len(records), -1)
+        if args.cam_norm == "episode":
+            scale = np.full(len(records), np.percentile(values, percentile))
+        else:
+            scale = np.percentile(values, percentile, axis=1)
+        return np.maximum(scale, 1e-12)
+
     # A few "attention sink" patches soak up most of the attention mass in ViT-fed transformers;
-    # scaling to the 99th percentile keeps them from washing out the rest of the map.
-    attn_scale = np.maximum(np.percentile(attn_stack.reshape(len(records), -1), 99, axis=1), 1e-12)
-    if args.cam_norm == "episode":
-        cam_scale[:] = cam_scale.max()
-        attn_scale[:] = np.percentile(attn_stack, 99)
+    # scaling attention to the 99th percentile keeps them from washing out the rest of the map.
+    cam_scale, attn_scale = {}, {}
+    for group in groups:
+        group_cam_scale = group_scales("cams", group, 100)
+        group_attn_scale = group_scales("attn", group, 99)
+        for key in group:
+            cam_scale[key] = group_cam_scale
+            attn_scale[key] = group_attn_scale
+    labels = [CAMERA_LABELS.get(k, k) for k in shown]
+    attn_titles = ["T3 CLS attn" if k in TACTILE_KEYS else "action->image attn" for k in shown]
 
     share_names = list(records[0]["shares"])
     shares = np.asarray([[r["shares"][s] for s in share_names] for r in records])
@@ -520,13 +614,17 @@ def write_episode_outputs(out_dir: Path, episode, records, camera_keys, args, us
         header = [
             f"{episode.episode_id}  frame {record['frame']}  target={args.target}  cam={args.cam_method}  "
             f"action MSE vs recording={record['mse']:.4f}",
-            "attn share: " + "  ".join(f"{name} {record['shares'][name]:.2f}" for name in share_names),
+            *textwrap.wrap(
+                "attn share: " + "  ".join(f"{name} {record['shares'][name]:.2f}" for name in share_names),
+                width=args.display_size * 3 // 11,
+            ),
         ]
         panel = render_panel(
             [record["images"][k] for k in shown],
-            [record["cams"][k] / cam_scale[i] for k in shown],
-            [record["attn"][k] / attn_scale[i] for k in shown],
+            [record["cams"][k] / cam_scale[k][i] for k in shown],
+            [record["attn"][k] / attn_scale[k][i] for k in shown],
             labels,
+            attn_titles,
             header,
             args,
         )
@@ -539,25 +637,40 @@ def write_episode_outputs(out_dir: Path, episode, records, camera_keys, args, us
     if writer is not None:
         writer.release()
 
+    arrays = {}
+    mass_groups = []
+    if vision_keys:
+        arrays.update(
+            camera_names=np.asarray([CAMERA_LABELS.get(k, k) for k in vision_keys]),
+            gradcam=stack("cams", vision_keys),
+            attention=stack("attn", vision_keys),
+        )
+        mass = arrays["gradcam"].reshape(len(records), len(vision_keys), -1).sum(axis=2)
+        mass_groups.append(("camera Grad-CAM mass", mass, arrays["camera_names"].tolist()))
+    if tactile_keys:
+        arrays.update(
+            tactile_names=np.asarray(tactile_keys),
+            tactile_gradcam=stack("cams", tactile_keys),
+            tactile_cls_attention=stack("attn", tactile_keys),
+        )
+        mass = arrays["tactile_gradcam"].reshape(len(records), len(tactile_keys), -1).sum(axis=2)
+        mass_groups.append(("tactile Grad-CAM mass", mass, tactile_keys))
     np.savez_compressed(
         out_dir / "gradcam_data.npz",
         frame_indices=frame_indices,
-        camera_names=np.asarray(labels),
-        gradcam=cam_stack,
-        attention=attn_stack,
         attention_share=shares,
         attention_share_names=np.asarray(share_names),
         score=np.asarray([r["score"] for r in records]),
         action_mse=mses,
         pred_actions=np.stack([r["pred_actions"] for r in records]),
+        **arrays,
     )
     plot_timeline(
         out_dir / "timeline.png",
         frame_indices,
         shares,
         share_names,
-        cam_stack.reshape(len(records), len(shown), -1).sum(axis=2),
-        labels,
+        mass_groups,
         f"{episode.episode_id} ({args.target} target)",
     )
     summary = {
