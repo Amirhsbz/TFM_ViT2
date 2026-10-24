@@ -68,6 +68,8 @@ SAVE_INTERVAL=3000                    # checkpoint every N steps; train_haptile_
                                        # full for --resume, plus model-only keep_period milestones)
                                        # so this no longer grows disk usage without bound
 TACTILE_EXPERT_VARIANT=gemma_300m     # only field env-overridable here -- see note above
+TACTILE_EXPERT_TYPE=transformer       # "transformer": dedicated ~300M tactile-expert branch;
+                                      # "mlp": encoder tokens go straight into the action expert
 PI05=false                            # plain pi0 (this project's convention); true = pi0.5 -- see note above
 LOAD_T3_CHECKPOINT=true               # fine-tune the tactile ViT encoder from a pretrained T3
                                        # checkpoint rather than random init -- verified working
@@ -131,6 +133,7 @@ export PI0_UR5E_TACTILE_TRAIN_STEPS="${STEPS}"
 export PI0_UR5E_TACTILE_BATCH_SIZE="${BATCH_SIZE}"
 export PI0_UR5E_TACTILE_SAVE_INTERVAL="${SAVE_INTERVAL}"
 export PI0_UR5E_TACTILE_EXPERT_VARIANT="${TACTILE_EXPERT_VARIANT}"
+export PI0_UR5E_TACTILE_EXPERT_TYPE="${TACTILE_EXPERT_TYPE}"
 export PI0_UR5E_TACTILE_PI05="${PI05}"
 export PI0_UR5E_TACTILE_LOAD_T3_CHECKPOINT="${LOAD_T3_CHECKPOINT}"
 export PI0_UR5E_TACTILE_T3_SENSOR_NAME="${T3_SENSOR_NAME}"
