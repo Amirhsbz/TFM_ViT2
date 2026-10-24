@@ -38,6 +38,7 @@ _TELE_GSY_PI0_UR5E_TACTILE_ACTION_ORDER = (
     else ["joint_0", "joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "gripper"]
 )
 _TELE_GSY_PI0_UR5E_TACTILE_USE_TACTILE_INPUT = _tele_gsy_tactile_env_bool("PI0_UR5E_TACTILE_USE_TACTILE_INPUT", True)
+_TELE_GSY_PI0_UR5E_TACTILE_EXPERT_TYPE = _tele_gsy_os.environ.get("PI0_UR5E_TACTILE_EXPERT_TYPE", "transformer")
 # Defaults False (plain pi0), matching every other task's TrainConfig in this repo -- see
 # HaptileTactileConfig.pi05's own field comment for why. Set PI0_UR5E_TACTILE_PI05=true to opt
 # into pi0.5's discrete-state-in-prompt convention instead.
@@ -50,6 +51,9 @@ _TELE_GSY_PI0_UR5E_TACTILE_MODEL = HaptileTactileConfig(
     # and gemma_300m(_lora) both have head_dim=256, so this holds; do not swap in "dummy" here.
     tactile_expert_variant=_tele_gsy_os.environ.get("PI0_UR5E_TACTILE_EXPERT_VARIANT", "gemma_300m"),
     use_tactile_input=_TELE_GSY_PI0_UR5E_TACTILE_USE_TACTILE_INPUT,
+    # "transformer" (dedicated tactile-expert branch) or "mlp" (encoder tokens fed straight into
+    # the action expert) -- see HaptileTactileConfig.tactile_expert_type.
+    tactile_expert_type=_TELE_GSY_PI0_UR5E_TACTILE_EXPERT_TYPE,
     pi05=_TELE_GSY_PI0_UR5E_TACTILE_PI05,
     load_t3_tactile_checkpoint=_tele_gsy_tactile_env_bool("PI0_UR5E_TACTILE_LOAD_T3_CHECKPOINT", True),
     t3_sensor_name=_tele_gsy_os.environ.get("PI0_UR5E_TACTILE_T3_SENSOR_NAME", "gs_tag"),
@@ -112,6 +116,7 @@ _CONFIGS.append(
             "gripper_is_delta": False,
             "camera_padding_strategy": _tele_gsy_os.environ.get("PI0_UR5E_TACTILE_CAMERA_PADDING", "zeros"),
             "use_tactile_input": _TELE_GSY_PI0_UR5E_TACTILE_USE_TACTILE_INPUT,
+            "tactile_expert_type": _TELE_GSY_PI0_UR5E_TACTILE_EXPERT_TYPE,
             "pi05": _TELE_GSY_PI0_UR5E_TACTILE_PI05,
         },
     )

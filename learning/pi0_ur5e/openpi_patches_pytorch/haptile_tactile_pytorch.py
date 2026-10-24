@@ -111,24 +111,29 @@ class HaptileTactilePI0Pytorch(nn.Module):
         self.config = config
         self.pi05 = config.pi05
 
+        # Where the tactile tokens go (HaptileTactileConfig.tactile_expert_type): into a dedicated
+        # transformer branch, or straight into the action expert's suffix next to the state token.
+        self.use_tactile_expert = config.use_tactile_input and config.tactile_expert_type == "transformer"
+        self.use_tactile_suffix_tokens = config.use_tactile_input and config.tactile_expert_type == "mlp"
+
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
         tactile_expert_config = (
-            _gemma.get_config(config.tactile_expert_variant) if config.use_tactile_input else None
+            _gemma.get_config(config.tactile_expert_variant) if self.use_tactile_expert else None
         )
 
         self.paligemma_with_expert = FTP1PaliGemmaWithExpertModel(
             paligemma_config,
             action_expert_config,
             tactile_expert_config,
-            use_tactile_input=config.use_tactile_input,
+            use_tactile_input=self.use_tactile_expert,
             use_adarms=[False, True] if self.pi05 else [False, False],
             precision=config.dtype,
         )
 
         self.tactile_encoder = (
             HaptileTactileEncoder(
-                token_dim=tactile_expert_config.width,
+                token_dim=tactile_expert_config.width if self.use_tactile_expert else action_expert_config.width,
                 sensor_name=config.t3_sensor_name,
                 load_t3_pretrained_checkpoint=config.load_t3_tactile_checkpoint,
                 cache_t3_pretrained_checkpoint_dir=config.t3_checkpoint_cache_dir,
@@ -380,11 +385,15 @@ class HaptileTactilePI0Pytorch(nn.Module):
         tokens, pad_mask = self._apply_checkpoint(tactile_embed_func, tactile_left, tactile_right)
         return tokens, pad_mask
 
-    def embed_suffix(self, state, noisy_actions, timestep):
+    def embed_suffix(self, state, noisy_actions, timestep, tactile_tokens=None):
         """Matches PI0Pytorch.embed_suffix exactly, branching on self.pi05 the same way: pi05
         embeds only action+time (via adaRMS conditioning on the action-expert branch, no separate
         state token); non-pi05 embeds state as its own leading suffix token and fuses action+time
         by concatenation through an MLP instead (no adaRMS conditioning, adarms_cond=None).
+
+        tactile_tokens (tactile_expert_type="mlp" only) are inserted after the state token, in the
+        same attention block: they see the prefix, the state and each other, and every action
+        token sees them. With tactile_tokens=None this is identical to PI0Pytorch.embed_suffix.
         """
         embs = []
         pad_masks = []
@@ -408,6 +417,15 @@ class HaptileTactilePI0Pytorch(nn.Module):
 
             # Set attention masks so that image and language inputs do not attend to state or actions
             att_masks += [1]
+
+        if tactile_tokens is not None:
+            num_tactile = tactile_tokens.shape[1]
+            embs.append(tactile_tokens.to(self.action_in_proj.weight.dtype))
+            pad_masks.append(
+                torch.ones(tactile_tokens.shape[0], num_tactile, dtype=torch.bool, device=tactile_tokens.device)
+            )
+            # Join the state token's block; under pi05 there is no state token, so open a new one.
+            att_masks += [0 if att_masks else 1] + [0] * (num_tactile - 1)
 
         time_emb = create_sinusoidal_pos_embedding(
             timestep, self.action_in_proj.out_features, min_period=4e-3, max_period=4.0, device=timestep.device
@@ -489,15 +507,18 @@ class HaptileTactilePI0Pytorch(nn.Module):
         u_t = noise - actions
 
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
-        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(state, x_t, time)
 
-        use_tactile_branch = self.config.use_tactile_input
         tactile_embs, tactile_pad_masks = self.embed_tactile(tactile_left, tactile_right)
-        if use_tactile_branch and tactile_embs is None:
+        if self.config.use_tactile_input and tactile_embs is None:
             raise ValueError(
                 "config.use_tactile_input=True requires tactile_left_image/tactile_right_image "
                 "on the observation, but embed_tactile returned None."
             )
+        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(
+            state, x_t, time, tactile_tokens=tactile_embs if self.use_tactile_suffix_tokens else None
+        )
+
+        use_tactile_branch = self.use_tactile_expert
 
         if self.paligemma_with_expert.paligemma.language_model.layers[0].self_attn.q_proj.weight.dtype == torch.bfloat16:
             suffix_embs = suffix_embs.to(dtype=torch.bfloat16)
@@ -566,9 +587,11 @@ class HaptileTactilePI0Pytorch(nn.Module):
             observation, train=False
         )
 
-        use_tactile_branch = self.config.use_tactile_input
+        use_tactile_branch = self.use_tactile_expert
+        # Encoded once per action chunk in both modes; in "mlp" mode the same tokens are then
+        # reused in the suffix of every denoising step below.
         tactile_embs, tactile_pad_masks = self.embed_tactile(tactile_left, tactile_right)
-        if use_tactile_branch and tactile_embs is None:
+        if self.config.use_tactile_input and tactile_embs is None:
             raise ValueError(
                 "config.use_tactile_input=True requires tactile_left_image/tactile_right_image "
                 "on the observation, but embed_tactile returned None."
@@ -642,15 +665,20 @@ class HaptileTactilePI0Pytorch(nn.Module):
                 past_key_values,
                 x_t,
                 expanded_time,
+                suffix_tactile_tokens=tactile_embs if self.use_tactile_suffix_tokens else None,
             )
             x_t = x_t + dt * v_t
             time += dt
         return x_t
 
-    def denoise_step(self, state, prefix_pad_masks, tactile_pad_masks, past_key_values, x_t, timestep):
+    def denoise_step(
+        self, state, prefix_pad_masks, tactile_pad_masks, past_key_values, x_t, timestep, suffix_tactile_tokens=None
+    ):
         """Apply one denoising step of the noise `x_t` at a given timestep, reusing the cache
         built once in sample_actions (tactile tokens are never recomputed here)."""
-        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(state, x_t, timestep)
+        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(
+            state, x_t, timestep, tactile_tokens=suffix_tactile_tokens
+        )
 
         use_tactile_branch = tactile_pad_masks is not None
         layout = build_action_denoise_layout(

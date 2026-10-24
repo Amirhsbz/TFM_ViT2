@@ -28,6 +28,16 @@ class HaptileTactileConfig(_model.BaseModelConfig):
     tactile_expert_variant: _gemma.Variant = "gemma_300m"
     use_tactile_input: bool = True
 
+    # How the tactile encoder's two tokens (one per finger) reach the policy, when
+    # use_tactile_input is True:
+    #   "transformer" -- a dedicated Gemma tactile-expert branch (tactile_expert_variant, ~300M
+    #       params, trained from scratch) processes them at every layer, and the action expert
+    #       attends to its keys/values (FTP1's design).
+    #   "mlp" -- no tactile expert: the tokens produced by the encoder's projection MLP are
+    #       placed directly in the action expert's input, next to the state token, and processed
+    #       by its pretrained weights. Far fewer from-scratch parameters, for small datasets.
+    tactile_expert_type: str = "transformer"
+
     # Whether the tactile ViT encoder should initialize from a pretrained T3 checkpoint
     # (downloaded from HuggingFace, see haptile_tactile_encoder.py's
     # T3_PRETRAINED_TACTILE_ENCODER_CHECKPOINTS_BASE_URL) rather than random weights, then
@@ -85,6 +95,8 @@ class HaptileTactileConfig(_model.BaseModelConfig):
             object.__setattr__(self, "discrete_state_input", self.pi05)
         if self.vision_tower_mode not in ("full", "lora", "frozen"):
             raise ValueError(f"vision_tower_mode must be one of 'full'/'lora'/'frozen', got {self.vision_tower_mode!r}")
+        if self.tactile_expert_type not in ("transformer", "mlp"):
+            raise ValueError(f"tactile_expert_type must be 'transformer' or 'mlp', got {self.tactile_expert_type!r}")
 
     @property
     def model_type(self) -> _model.ModelType:
@@ -130,25 +142,35 @@ class HaptileTactileConfig(_model.BaseModelConfig):
         from openpi.models_pytorch.haptile_tactile_pytorch import HaptileTactilePI0Pytorch
 
         with safetensors.safe_open(weight_path, framework="pt") as f:
-            lora_keys = [key for key in f.keys() if "lora_" in key]  # noqa: SIM118
+            keys = list(f.keys())  # noqa: SIM118
+            lora_keys = [key for key in keys if "lora_" in key]
             vision_lora_a_keys = [key for key in lora_keys if "vision_tower" in key and "lora_A" in key]
             # A LoRA adapter's rank is the first dimension of its lora_A matrix, so the weights
             # themselves are an authoritative source for it -- no metadata or environment needed.
             vision_lora_rank = f.get_slice(vision_lora_a_keys[0]).get_shape()[0] if vision_lora_a_keys else None
         has_vision_lora = any("vision_tower" in key for key in lora_keys)
         has_backbone_lora = any("vision_tower" not in key for key in lora_keys)
+        has_tactile_encoder = any(key.startswith("tactile_encoder.") for key in keys)
+        has_tactile_transformer = any(".gemma_tactile_expert." in key for key in keys)
 
-        model_config = self
+        overrides = {}
+        if self.use_tactile_input and has_tactile_encoder:
+            # Same reasoning as the LoRA settings below: the checkpoint says which tactile
+            # architecture it was trained with, so serving never depends on
+            # PI0_UR5E_TACTILE_EXPERT_TYPE on the serving machine matching the training run.
+            overrides["tactile_expert_type"] = "transformer" if has_tactile_transformer else "mlp"
         if has_vision_lora:
             # configure_vision_tower_training() reads vision_tower_mode off the config, which
             # defaults to "full" (a no-op) unless the serving machine happens to set
             # PI0_UR5E_TACTILE_VISION_TOWER_MODE -- so force it here instead of depending on the
             # serve-time environment matching the training environment.
-            overrides = {"vision_tower_mode": "lora", "vision_lora_rank": vision_lora_rank}
+            overrides.update({"vision_tower_mode": "lora", "vision_lora_rank": vision_lora_rank})
             overrides.update(_read_trained_vision_lora_alpha(pathlib.Path(weight_path).parent))
-            model_config = _dc.replace(self, **overrides)
+        model_config = _dc.replace(self, **overrides) if overrides else self
 
         model = HaptileTactilePI0Pytorch(config=model_config)
+        if "tactile_expert_type" in overrides:
+            logging.info("Rebuilt tactile path from checkpoint: tactile_expert_type=%s", overrides["tactile_expert_type"])
         if has_backbone_lora:
             model.apply_lora_to_backbone()
         if has_vision_lora:
