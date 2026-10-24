@@ -3,6 +3,7 @@
 #SBATCH --job-name=train_pi0_haptile_tactile_peg_insertion_mlp
 #SBATCH --gres=gpu:1
 #SBATCH --constraint="a100_40g|h200|a100_80g|l40s"
+#SBATCH --exclude=erc-hpc-comp040
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=30:00:00
