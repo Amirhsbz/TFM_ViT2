@@ -14,6 +14,10 @@ Where each episode is cut:
     they would add nothing to the post-grasp samples.
   * then past the still frames between grasp-complete and the arm starting to move, keeping
     --padding of them, so the policy does not learn to idle at the start pose.
+  * or, with --cut close_onset, --pre_close_frames before the gripper starts closing, with the
+    arm already at the object. The policy then does the closing itself: at deployment the arm is
+    put at the grasp pose with the object between the open fingers. Those frames are not
+    trimmed as still, since the closing happens with the arm still.
   * the tail loses the still frames after both the arm and the gripper have stopped. The
     release stays in: it is part of the task ("... and put the sponge back"), and it happens
     with the arm already still, so arm motion alone would cut it off.
@@ -49,11 +53,25 @@ MOTION_THRESHOLD = 0.001  # m/frame, same as trim_bc_data_by_eef_motion.py
 MIN_MOTION_RUN = 3
 
 
-def post_grasp_range(gripper, ee_xyz, settle_fraction, padding):
-    """(start, end, grasp_complete) of the post-grasp part of one episode, or a reason string."""
+def closing_start(signal, grasp):
+    """First frame of the closing that ends in the grasp: where `signal` last leaves its open level.
+
+    The open level is taken just before the grasp rather than at frame 0, because an episode can
+    start with the gripper still part-closed from the previous recording.
+    """
+    open_level = signal[: grasp + 1].min()
+    at_open = np.flatnonzero(signal[:grasp] <= open_level + 0.05 * (signal.max() - signal.min()))
+    return int(at_open[-1]) + 1 if len(at_open) else 0
+
+
+def post_grasp_range(gripper, command, ee_xyz, cut, settle_fraction, padding, pre_close_frames):
+    """(start, end, close_start, grasp_complete) of the part of one episode to keep, or a reason string."""
     grasp = grasp_index(gripper)
     if grasp is None:
         return "no grasp: gripper never closes"
+    # The command leads the measured position by a frame or so; whichever moves first marks the
+    # moment the operator decided to close.
+    close_start = min(closing_start(gripper, grasp), closing_start(command, grasp))
 
     # The closed segment runs from the grasp until the gripper is back within half way of open
     # (the release); the level it settles at within it is how tightly this demo held the object.
@@ -69,12 +87,15 @@ def post_grasp_range(gripper, ee_xyz, settle_fraction, padding):
     if first_run is None or last_run is None or last_run[1] <= grasp_complete:
         return "arm never moves after the grasp"
 
-    start = max(grasp_complete, grasp_complete + first_run[0] - padding)
+    if cut == "close_onset":
+        start = max(0, close_start - pre_close_frames)
+    else:
+        start = max(grasp_complete, grasp_complete + first_run[0] - padding)
     # last_run[1] indexes displacements; displacement i connects frame i -> i + 1. The release
     # usually happens with the arm already still, so the tail runs until the gripper stops too.
     last_gripper_change = int(np.flatnonzero(np.abs(np.diff(gripper)) > 1e-3)[-1]) + 1
     end = min(len(gripper), max(last_run[1] + 1, last_gripper_change + 1) + padding)
-    return start, end, grasp_complete
+    return start, end, close_start, grasp_complete
 
 
 def start_pose(kept):
@@ -86,8 +107,9 @@ def start_pose(kept):
         "episode": kept[medoid]["name"],
         "arm_joints_rad": [float(x) for x in arm[medoid]],
         "arm_joints_deg": [round(float(x), 2) for x in np.degrees(arm[medoid])],
-        # What to command the gripper to once the object is in it: the demos' own command at their
-        # first kept frame, so the gripper state the policy sees matches what it was trained on.
+        # The demos' own gripper command at their first kept frame, so the gripper state the policy
+        # sees at the start matches what it was trained on: closed on the object for a
+        # grasp_complete cut, open for a close_onset cut.
         "gripper_command": float(np.median([k["first_gripper_command"] for k in kept])),
         "gripper_position_expected": float(np.median([k["first_gripper_position"] for k in kept])),
         "ee_xyz": [float(x) for x in kept[medoid]["first_ee_xyz"]],
@@ -101,12 +123,12 @@ def start_pose(kept):
     }
 
 
-def trim_post_grasp(input_root, output_root, settle_fraction, padding, min_frames):
+def trim_post_grasp(input_root, output_root, cut, settle_fraction, padding, pre_close_frames, min_frames):
     if os.path.exists(output_root):
         raise SystemExit(f"{output_root} already exists; remove it first.")
 
     names = [p for p in sorted(os.listdir(input_root)) if is_valid_trajectory_dir(input_root, p)]
-    print(f"trimming {len(names)} episodes from {input_root} to {output_root} (settle {settle_fraction}, padding {padding})")
+    print(f"trimming {len(names)} episodes from {input_root} to {output_root} (cut at {cut})")
 
     kept, skipped = [], []
     for name in names:
@@ -118,7 +140,7 @@ def trim_post_grasp(input_root, output_root, settle_fraction, padding, min_frame
             joints = np.asarray(f["frames/joint_positions"])
             control = np.asarray(f["frames/control"])
 
-        result = post_grasp_range(gripper, ee_xyz, settle_fraction, padding)
+        result = post_grasp_range(gripper, control[:, 6], ee_xyz, cut, settle_fraction, padding, pre_close_frames)
         if isinstance(result, tuple) and result[1] - result[0] < min_frames:
             result = f"only {result[1] - result[0]} frames after the grasp"
         if isinstance(result, str):
@@ -126,7 +148,7 @@ def trim_post_grasp(input_root, output_root, settle_fraction, padding, min_frame
             skipped.append({"name": name, "reason": result})
             continue
 
-        start, end, grasp_complete = result
+        start, end, close_start, grasp_complete = result
         output_dir = os.path.join(output_root, name)
         os.makedirs(output_dir)
         output_h5 = os.path.join(output_dir, "trajectory.h5")
@@ -139,6 +161,7 @@ def trim_post_grasp(input_root, output_root, settle_fraction, padding, min_frame
         kept.append({
             "name": name,
             "original_frames": frame_count,
+            "close_start": close_start,
             "grasp_complete": grasp_complete,
             "start": start,
             "end": end,
@@ -152,15 +175,17 @@ def trim_post_grasp(input_root, output_root, settle_fraction, padding, min_frame
 
     if not kept:
         raise SystemExit("no episode had a usable grasp")
-    pose = start_pose(kept)
+    pose = {"cut": cut, **start_pose(kept)}
     with open(os.path.join(output_root, "start_pose.json"), "w") as f:
         json.dump(pose, f, indent=2)
     with open(os.path.join(output_root, "trim_report.json"), "w") as f:
         json.dump(
             {
                 "input_root": os.path.realpath(input_root),
+                "cut": cut,
                 "settle_fraction": settle_fraction,
                 "padding": padding,
+                "pre_close_frames": pre_close_frames,
                 "kept": [{k: v for k, v in item.items() if not k.startswith("first_")} for item in kept],
                 "skipped": skipped,
             },
@@ -183,15 +208,26 @@ if __name__ == "__main__":
     arg.add_argument("--output_path", type=str, required=True)
     arg.add_argument("--data_name", type=str, required=True)
     arg.add_argument("--suffix", type=str, default="_postgrasp", help="appended to data_name for the output folder")
+    arg.add_argument(
+        "--cut",
+        type=str,
+        default="grasp_complete",
+        choices=["grasp_complete", "close_onset"],
+        help="start each episode once the gripper has closed on the object (grasp_complete), or "
+        "just before it starts closing (close_onset)",
+    )
     arg.add_argument("--settle_fraction", type=float, default=0.95, help="how closed the gripper must be to count as grasped")
     arg.add_argument("--padding", type=int, default=5, help="still frames to keep before the arm starts and after it stops")
+    arg.add_argument("--pre_close_frames", type=int, default=3, help="with --cut close_onset, frames to keep before the closing starts")
     arg.add_argument("--min_frames", type=int, default=30, help="skip episodes with fewer post-grasp frames than this")
     args = arg.parse_args()
 
     trim_post_grasp(
         os.path.join(args.base_path, args.data_name),
         os.path.join(args.output_path, args.data_name + args.suffix),
+        args.cut,
         args.settle_fraction,
         args.padding,
+        args.pre_close_frames,
         args.min_frames,
     )
