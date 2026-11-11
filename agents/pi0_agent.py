@@ -369,15 +369,17 @@ class Pi0Agent:
             curr_eef_pose = np.asarray(obs["ee_pos_quat"], dtype=np.float32).reshape(-1)[:6]
             return get_eef_pose(curr_eef_pose, action)
 
-        action = raw_action
+        action = raw_action.copy()
         if len(action) != len(np.asarray(obs["joint_positions"]).reshape(-1)):
             raise ValueError(
                 "pi0 without _eef expects a joint-space policy output matching joint_positions. "
                 f"Got action shape {action.shape}; use --agent pi0_eef for the current ee_delta_6d_gripper policy."
             )
+        # Arm joints get the joint EMA; the gripper goes through its own latch + EMA (gripper_ema_alpha),
+        # same as the eef path, so chunk-to-chunk dips in the predicted gripper value don't loosen the grasp.
         if self.last_joint_action is not None and self.last_joint_action.shape == action.shape:
-            action = self.joint_ema_alpha * action + (1.0 - self.joint_ema_alpha) * self.last_joint_action
-        action[-1] = np.clip(action[-1], self.config.action_limits["min_gripper"], self.config.action_limits["max_gripper"])
+            action[:-1] = self.joint_ema_alpha * action[:-1] + (1.0 - self.joint_ema_alpha) * self.last_joint_action[:-1]
+        action[-1] = self._stabilize_gripper(float(action[-1]))
         if self.debug_actions:
             joints = np.asarray(obs["joint_positions"], dtype=np.float32).reshape(-1)
             diff = action - joints[: action.shape[0]]
@@ -388,6 +390,8 @@ class Pi0Agent:
                 f"cmd={action.tolist()}",
                 f"current={joints[: action.shape[0]].tolist()}",
                 f"diff={diff.tolist()}",
+                f"closed={self.gripper_closed}",
+                f"hold={self.gripper_hold_steps}",
             )
         self.last_joint_action = action.copy()
         return action.astype(np.float32)
