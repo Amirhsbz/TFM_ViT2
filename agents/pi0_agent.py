@@ -48,6 +48,8 @@ class Pi0Agent:
         gripper_close_threshold: float = 0.18,
         gripper_open_threshold: float = 0.08,
         gripper_min_hold_steps: int = 30,
+        gripper_release_fraction: float = 0.8,
+        gripper_release_confirm_steps: int = 2,
         debug_actions: bool = False,
         async_prefetch: bool = True,
         prefetch_threshold: int = 2,
@@ -81,6 +83,8 @@ class Pi0Agent:
         self.gripper_close_threshold = float(gripper_close_threshold)
         self.gripper_open_threshold = float(gripper_open_threshold)
         self.gripper_min_hold_steps = max(int(gripper_min_hold_steps), 0)
+        self.gripper_release_fraction = float(gripper_release_fraction)
+        self.gripper_release_confirm_steps = max(int(gripper_release_confirm_steps), 1)
         self.debug_actions = debug_actions
         self.async_prefetch = bool(async_prefetch)
         self.prefetch_threshold = max(int(prefetch_threshold), 0)
@@ -94,7 +98,10 @@ class Pi0Agent:
         self.last_joint_action: np.ndarray | None = None
         self.last_gripper_action: float | None = None
         self.gripper_closed = False
+        self.gripper_releasing = False
         self.gripper_hold_steps = 0
+        self.gripper_release_count = 0
+        self.gripper_hold_history: collections.deque[float] = collections.deque(maxlen=30)
         self.control = get_reset_joints(ur_eef=predict_eef_delta)
         self.trigger_state = True
         self.control_active = True
@@ -114,7 +121,10 @@ class Pi0Agent:
         self.last_joint_action = None
         self.last_gripper_action = None
         self.gripper_closed = False
+        self.gripper_releasing = False
         self.gripper_hold_steps = 0
+        self.gripper_release_count = 0
+        self.gripper_hold_history.clear()
         reset = getattr(self.client, "reset", None)
         if callable(reset):
             reset()
@@ -309,18 +319,41 @@ class Pi0Agent:
         raw_gripper = float(np.clip(raw_gripper, self.config.action_limits["min_gripper"], self.config.action_limits["max_gripper"]))
         previous = raw_gripper if self.last_gripper_action is None else self.last_gripper_action
 
-        if self.gripper_closed:
+        if self.gripper_releasing:
+            # Opening can only continue. Each new chunk is predicted from a partly-open gripper, so the
+            # policy carries the demos' release ramp on from there instead of restarting it from "closed".
+            target = min(previous, raw_gripper)
+            if target <= self.gripper_open_threshold:
+                self.gripper_releasing = False
+        elif self.gripper_closed:
             self.gripper_hold_steps += 1
+            self.gripper_hold_history.append(raw_gripper)
+            # Release starts once the prediction stays clearly below the typical hold level; waiting for
+            # it to reach open_threshold deadlocks, since a still-closed gripper keeps the policy
+            # predicting only the start of the release ramp.
+            hold_level = float(np.median(self.gripper_hold_history))
+            if raw_gripper < self.gripper_release_fraction * hold_level:
+                self.gripper_release_count += 1
+            else:
+                self.gripper_release_count = 0
             can_release = self.gripper_hold_steps >= self.gripper_min_hold_steps
-            if raw_gripper <= self.gripper_open_threshold and can_release:
+            wants_release = (
+                raw_gripper <= self.gripper_open_threshold
+                or self.gripper_release_count >= self.gripper_release_confirm_steps
+            )
+            if can_release and wants_release:
                 self.gripper_closed = False
                 self.gripper_hold_steps = 0
-                target = raw_gripper
+                self.gripper_release_count = 0
+                target = min(previous, raw_gripper)
+                self.gripper_releasing = target > self.gripper_open_threshold
             else:
                 target = max(previous, raw_gripper, self.gripper_close_threshold)
         elif raw_gripper >= self.gripper_close_threshold:
             self.gripper_closed = True
             self.gripper_hold_steps = 0
+            self.gripper_release_count = 0
+            self.gripper_hold_history.clear()
             target = raw_gripper
         elif raw_gripper <= self.gripper_open_threshold:
             target = raw_gripper
@@ -364,6 +397,7 @@ class Pi0Agent:
                     f"gripper_raw={float(raw_action[6]):.3f}" if raw_action.shape[0] >= 7 else "gripper_raw=NA",
                     f"gripper_cmd={float(action[6]):.3f}" if action.shape[0] >= 7 else "gripper_cmd=NA",
                     f"closed={self.gripper_closed}",
+                    f"releasing={self.gripper_releasing}",
                     f"hold={self.gripper_hold_steps}",
                 )
             curr_eef_pose = np.asarray(obs["ee_pos_quat"], dtype=np.float32).reshape(-1)[:6]
@@ -391,6 +425,7 @@ class Pi0Agent:
                 f"current={joints[: action.shape[0]].tolist()}",
                 f"diff={diff.tolist()}",
                 f"closed={self.gripper_closed}",
+                f"releasing={self.gripper_releasing}",
                 f"hold={self.gripper_hold_steps}",
             )
         self.last_joint_action = action.copy()

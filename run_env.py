@@ -1242,7 +1242,9 @@ class Args:
     pi0_gripper_ema_alpha: float = 0.35
     pi0_gripper_close_threshold: float = 0.18
     pi0_gripper_open_threshold: float = 0.08
-    pi0_gripper_min_hold_steps: int = 30
+    pi0_gripper_min_hold_steps: int = 10
+    pi0_gripper_release_fraction: float = 0.8
+    pi0_gripper_release_confirm_steps: int = 2
     pi0_debug_actions: bool = False
     pi0_async_prefetch: bool = True
     pi0_prefetch_threshold: int = 2
@@ -1411,6 +1413,8 @@ def main(args):
             gripper_close_threshold=args.pi0_gripper_close_threshold,
             gripper_open_threshold=args.pi0_gripper_open_threshold,
             gripper_min_hold_steps=args.pi0_gripper_min_hold_steps,
+            gripper_release_fraction=args.pi0_gripper_release_fraction,
+            gripper_release_confirm_steps=args.pi0_gripper_release_confirm_steps,
             debug_actions=args.pi0_debug_actions,
             async_prefetch=args.pi0_async_prefetch,
             prefetch_threshold=args.pi0_prefetch_threshold,
