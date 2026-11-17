@@ -1,3 +1,5 @@
+from __future__ import annotations  # `X | None` annotations on Python < 3.10 (e.g. the HPC tele env)
+
 import os
 import shutil
 import itertools
