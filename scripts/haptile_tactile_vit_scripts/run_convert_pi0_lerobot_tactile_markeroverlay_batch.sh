@@ -66,13 +66,10 @@ OVERLAY_SCRIPT=${PROJECT_ROOT}/Data_analysis/batch_replace_tactile_videos_with_m
 # One line per dataset:  "<source path relative to SHIYI_ROOT>|<language prompt>"
 # Comment a line out to skip it. Prompts are copied from the per-task convert scripts.
 TASKS=(
-  "shared/data/bc_data/grab_03_disposableCup_move|Lift the disposable paper cup and place it on the other side of the table"
-  "shared/data/bc_data/peg_in_hole|Pick up the peg and insert it into the matching hole"
-  "shared/data/bc_data/turn_cleanser_water_bottle|Pick up the cleanser bottle, tilt it over either the yellow bowl or the blue bowl as if pouring, then place it back in its original position"
-  "data_split/wipe_board_sep_train|Grab the sponge, wipe the markers on the white board and put the sponge back"
-  "data_split/wipe_board_sep_test|Grab the sponge, wipe the markers on the white board and put the sponge back"
-  "data_split/wipe_board_sep_postgrasp_train|Wipe the markers on the white board and put the sponge back"
-  "data_split/wipe_board_sep_postgrasp_test|Wipe the markers on the white board and put the sponge back"
+  "shared/data/bc_data/move_disposable_cup_nov|Lift the disposable paper cup and place it on the red plate"
+  "shared/data/bc_data/turn_cleanser_bottle_nov|Pick up the cleanser bottle, tilt it over the blue bowl as if pouring, then place it back"
+  "shared/data/bc_data/turn_cleanser_water_bottle_nov_postgrasp|Pick up the cleanser bottle, tilt it over the blue bowl as if pouring, then place it back"
+  "shared/data/bc_data/wipe_board_sep_postgrasp|Wipe the markers on the white board and put the sponge back"
   # CHANGE_ME: run_convert_pi0_lerobot_tactile_raw_Orange_picking.sh uses the wipe-board prompt
   # (looks like a copy-paste slip) -- fill in the real orange prompt before enabling this:
   # "shared/data/bc_data/Orange_picking|<orange picking prompt>"
