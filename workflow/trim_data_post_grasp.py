@@ -18,6 +18,10 @@ Where each episode is cut:
     arm already at the object. The policy then does the closing itself: at deployment the arm is
     put at the grasp pose with the object between the open fingers. Those frames are not
     trimmed as still, since the closing happens with the arm still.
+  * or, with --cut first_close_command, --pre_close_frames before the operator first commands
+    the gripper to close. Unlike close_onset this does not look for the grasp itself, so an
+    attempt that fails and is retried stays in the episode.
+  * --tail keep leaves the end of the episode as recorded instead.
   * the tail loses the still frames after both the arm and the gripper have stopped. The
     release stays in: it is part of the task ("... and put the sponge back"), and it happens
     with the arm already still, so arm motion alone would cut it off.
@@ -64,8 +68,31 @@ def closing_start(signal, grasp):
     return int(at_open[-1]) + 1 if len(at_open) else 0
 
 
-def post_grasp_range(gripper, command, ee_xyz, cut, settle_fraction, padding, pre_close_frames):
+def first_close_command(command):
+    """Frame where the operator first starts closing the gripper, or None if they never do.
+
+    Taken from the command rather than the measured position: an episode can start with the
+    gripper still part-closed and opening from the previous recording while the command is
+    already open, and that is not a grasp attempt.
+    """
+    closing = np.flatnonzero(command[1:] > command[0] + 0.05) + 1
+    if not len(closing):
+        return None
+    at_open = np.flatnonzero(command[: closing[0]] <= command[0] + 1e-3)
+    return int(at_open[-1]) + 1
+
+
+def post_grasp_range(gripper, command, ee_xyz, cut, settle_fraction, padding, pre_close_frames, keep_tail):
     """(start, end, close_start, grasp_complete) of the part of one episode to keep, or a reason string."""
+    if cut == "first_close_command":
+        # Everything from the first close on stays, including any failed attempt and retry.
+        close_start = first_close_command(command)
+        if close_start is None:
+            return "no grasp: gripper is never commanded to close"
+        if not keep_tail:
+            raise ValueError("--cut first_close_command only supports --tail keep")
+        return max(0, close_start - pre_close_frames), len(gripper), close_start, None
+
     grasp = grasp_index(gripper)
     if grasp is None:
         return "no grasp: gripper never closes"
@@ -95,6 +122,8 @@ def post_grasp_range(gripper, command, ee_xyz, cut, settle_fraction, padding, pr
     # usually happens with the arm already still, so the tail runs until the gripper stops too.
     last_gripper_change = int(np.flatnonzero(np.abs(np.diff(gripper)) > 1e-3)[-1]) + 1
     end = min(len(gripper), max(last_run[1] + 1, last_gripper_change + 1) + padding)
+    if keep_tail:
+        end = len(gripper)
     return start, end, close_start, grasp_complete
 
 
@@ -123,7 +152,7 @@ def start_pose(kept):
     }
 
 
-def trim_post_grasp(input_root, output_root, cut, settle_fraction, padding, pre_close_frames, min_frames):
+def trim_post_grasp(input_root, output_root, cut, settle_fraction, padding, pre_close_frames, keep_tail, min_frames):
     if os.path.exists(output_root):
         raise SystemExit(f"{output_root} already exists; remove it first.")
 
@@ -140,7 +169,7 @@ def trim_post_grasp(input_root, output_root, cut, settle_fraction, padding, pre_
             joints = np.asarray(f["frames/joint_positions"])
             control = np.asarray(f["frames/control"])
 
-        result = post_grasp_range(gripper, control[:, 6], ee_xyz, cut, settle_fraction, padding, pre_close_frames)
+        result = post_grasp_range(gripper, control[:, 6], ee_xyz, cut, settle_fraction, padding, pre_close_frames, keep_tail)
         if isinstance(result, tuple) and result[1] - result[0] < min_frames:
             result = f"only {result[1] - result[0]} frames after the grasp"
         if isinstance(result, str):
@@ -186,6 +215,7 @@ def trim_post_grasp(input_root, output_root, cut, settle_fraction, padding, pre_
                 "settle_fraction": settle_fraction,
                 "padding": padding,
                 "pre_close_frames": pre_close_frames,
+                "tail": "keep" if keep_tail else "trim_still",
                 "kept": [{k: v for k, v in item.items() if not k.startswith("first_")} for item in kept],
                 "skipped": skipped,
             },
@@ -212,13 +242,21 @@ if __name__ == "__main__":
         "--cut",
         type=str,
         default="grasp_complete",
-        choices=["grasp_complete", "close_onset"],
-        help="start each episode once the gripper has closed on the object (grasp_complete), or "
-        "just before it starts closing (close_onset)",
+        choices=["grasp_complete", "close_onset", "first_close_command"],
+        help="start each episode once the gripper has closed on the object (grasp_complete), just "
+        "before it starts closing for the grasp (close_onset), or just before the operator first "
+        "commands it to close, keeping any failed attempt and retry (first_close_command)",
+    )
+    arg.add_argument(
+        "--tail",
+        type=str,
+        default="trim_still",
+        choices=["trim_still", "keep"],
+        help="drop the still frames after the arm and gripper stop (keeping --padding), or keep the end as recorded",
     )
     arg.add_argument("--settle_fraction", type=float, default=0.95, help="how closed the gripper must be to count as grasped")
     arg.add_argument("--padding", type=int, default=5, help="still frames to keep before the arm starts and after it stops")
-    arg.add_argument("--pre_close_frames", type=int, default=3, help="with --cut close_onset, frames to keep before the closing starts")
+    arg.add_argument("--pre_close_frames", type=int, default=3, help="with --cut close_onset or first_close_command, frames to keep before the closing starts")
     arg.add_argument("--min_frames", type=int, default=30, help="skip episodes with fewer post-grasp frames than this")
     args = arg.parse_args()
 
@@ -229,5 +267,6 @@ if __name__ == "__main__":
         args.settle_fraction,
         args.padding,
         args.pre_close_frames,
+        args.tail == "keep",
         args.min_frames,
     )
