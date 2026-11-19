@@ -1,6 +1,6 @@
 #!/bin/bash -l
 
-#SBATCH --job-name=convert_pi0_haptile_tactile_turn_cleanser_water_bottle_nov
+#SBATCH --job-name=convert_pi0_haptile_tactile_remove_laundrypod_postgrasp
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
 #SBATCH --mem=64G
@@ -25,10 +25,10 @@ set -e
 
 PROJECT_ROOT=/scratch/grp/luo/Amir/TFM_ViT2               # e.g. /scratch/grp/luo/<you>/project/tele-gsy
 OPENPI_ROOT=/scratch/users/k2691893/projects/openpi               # e.g. /scratch/grp/luo/<you>/project/openpi
-DATASET_NAME=turn_cleanser_bottle_nov             # e.g. fold_Tshirt
+DATASET_NAME=remove_laundrypod_postgrasp             # e.g. fold_Tshirt
 OUTPUT_NAME=${DATASET_NAME}_lerobot_tactile_raw
 REPO_ID=local/pi0_ur5e_${DATASET_NAME}_tactile_raw
-DEFAULT_PROMPT="Pick up the cleanser bottle, tilt it over the blue bowl as if pouring, then place it back"          # e.g. "Fold the t-shirt in half"
+DEFAULT_PROMPT="Pick up the laundry pod from the top of the box and drop it in the laundry basket"          # e.g. "Fold the t-shirt in half"
 
 INPUT_ROOT=/scratch/grp/luo/shiyi/project/tele-gsy/shared/data/bc_data/${DATASET_NAME}
 OUTPUT_ROOT=${PROJECT_ROOT}/outputs/${OUTPUT_NAME}

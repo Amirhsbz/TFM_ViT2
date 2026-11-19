@@ -1,6 +1,6 @@
 #!/bin/bash -l
 
-#SBATCH --job-name=train_pi0_haptile_tactile_turn_cleanser_water_bottle_nov_fp32
+#SBATCH --job-name=train_pi0_haptile_tactile_peg_insertion_nov_postgrasp_fp32
 #SBATCH --gres=gpu:1
 #SBATCH --constraint="a100_40g|h200|a100_80g|l40s"
 #SBATCH --cpus-per-task=16
@@ -50,8 +50,8 @@ set -e
 
 PROJECT_ROOT=/scratch/grp/luo/Amir/TFM_ViT2                # e.g. /scratch/grp/luo/<you>/project/tele-gsy
 OPENPI_ROOT=/scratch/users/k2691893/projects/openpi                  # e.g. /scratch/grp/luo/<you>/project/openpi
-DATASET_NAME=turn_cleanser_bottle_nov                # must match run_convert_pi0_lerobot_tactile_raw.sh's DATASET_NAME
-DEFAULT_PROMPT="Pick up the cleanser bottle, tilt it over the blue bowl as if pouring, then place it back"            # must match run_convert_pi0_lerobot_tactile_raw.sh's DEFAULT_PROMPT
+DATASET_NAME=peg_insertion_nov_postgrasp                # must match run_convert_pi0_lerobot_tactile_raw.sh's DATASET_NAME
+DEFAULT_PROMPT="Pick up the green peg and insert it into the red hole"            # must match run_convert_pi0_lerobot_tactile_raw.sh's DEFAULT_PROMPT
 EXP_NAME=${DATASET_NAME}_haptile_tactileexpert_vit                    # e.g. ${DATASET_NAME}_haptile_tactile
 
 LEROBOT_REPO_ID=local/pi0_ur5e_${DATASET_NAME}_tactile_raw
