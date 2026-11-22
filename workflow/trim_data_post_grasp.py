@@ -78,7 +78,8 @@ def first_close_command(command):
     closing = np.flatnonzero(command[1:] > command[0] + 0.05) + 1
     if not len(closing):
         return None
-    at_open = np.flatnonzero(command[: closing[0]] <= command[0] + 1e-3)
+    # A released trigger can rest a little above zero (0.002 seen), so "open" allows a margin.
+    at_open = np.flatnonzero(command[: closing[0]] <= command[: closing[0]].min() + 0.01)
     return int(at_open[-1]) + 1
 
 
