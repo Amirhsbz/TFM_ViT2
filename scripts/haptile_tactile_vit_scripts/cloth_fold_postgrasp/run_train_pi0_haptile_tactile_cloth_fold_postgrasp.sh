@@ -5,7 +5,7 @@
 #SBATCH --constraint="a100_40g|h200|a100_80g|l40s"
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=30:00:00
+#SBATCH --time=08:00:00
 #SBATCH --output=/scratch/users/k2691893/projects/tele-gsy/script_results/%x_%j.out
 #SBATCH --error=/scratch/users/k2691893/projects/tele-gsy/script_results/%x_%j.err
 # CHANGE_ME: add --account/--qos/--exclude directives to match your cluster's current
@@ -59,8 +59,8 @@ DATASET_ROOT=${PROJECT_ROOT}/outputs/${DATASET_NAME}_lerobot_tactile_raw
 OUTPUT_DIR=${PROJECT_ROOT}/outputs/pi0_${DATASET_NAME}_haptile_tactile
 
 WANDB=true
-OVERWRITE=true                        # set RESUME=true (and OVERWRITE irrelevant) to resume a crashed run
-RESUME=false
+OVERWRITE=false                        # set RESUME=true (and OVERWRITE irrelevant) to resume a crashed run
+RESUME=true
 STEPS=30000
 BATCH_SIZE=16
 SAVE_INTERVAL=3000                    # checkpoint every N steps; train_haptile_tactile_pytorch.py
