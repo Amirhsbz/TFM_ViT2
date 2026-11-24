@@ -153,11 +153,15 @@ def start_pose(kept):
     }
 
 
-def trim_post_grasp(input_root, output_root, cut, settle_fraction, padding, pre_close_frames, keep_tail, min_frames):
+def trim_post_grasp(input_root, output_root, cut, settle_fraction, padding, pre_close_frames, keep_tail, min_frames, end_at=None):
+    end_at = dict(end_at or {})
     if os.path.exists(output_root):
         raise SystemExit(f"{output_root} already exists; remove it first.")
 
     names = [p for p in sorted(os.listdir(input_root)) if is_valid_trajectory_dir(input_root, p)]
+    unknown = set(end_at) - set(names)
+    if unknown:
+        raise SystemExit(f"--end_at names episodes not in {input_root}: {sorted(unknown)}")
     print(f"trimming {len(names)} episodes from {input_root} to {output_root} (cut at {cut})")
 
     kept, skipped = [], []
@@ -171,6 +175,12 @@ def trim_post_grasp(input_root, output_root, cut, settle_fraction, padding, pre_
             control = np.asarray(f["frames/control"])
 
         result = post_grasp_range(gripper, control[:, 6], ee_xyz, cut, settle_fraction, padding, pre_close_frames, keep_tail)
+        if isinstance(result, tuple) and name in end_at:
+            # Manual end for an episode whose recording goes bad before it stops, e.g. someone
+            # walking into the camera view after the task is done.
+            if not result[0] < end_at[name] <= result[1]:
+                raise SystemExit(f"--end_at {name}={end_at[name]} is outside the kept range [{result[0]}:{result[1]}]")
+            result = (result[0], end_at[name], *result[2:])
         if isinstance(result, tuple) and result[1] - result[0] < min_frames:
             result = f"only {result[1] - result[0]} frames after the grasp"
         if isinstance(result, str):
@@ -195,6 +205,7 @@ def trim_post_grasp(input_root, output_root, cut, settle_fraction, padding, pre_
             "grasp_complete": grasp_complete,
             "start": start,
             "end": end,
+            **({"end_override": True} if name in end_at else {}),
             "first_joints": joints[start],
             "first_ee_xyz": ee_xyz[start],
             "first_gripper_command": float(control[start, 6]),
@@ -259,6 +270,13 @@ if __name__ == "__main__":
     arg.add_argument("--padding", type=int, default=5, help="still frames to keep before the arm starts and after it stops")
     arg.add_argument("--pre_close_frames", type=int, default=3, help="with --cut close_onset or first_close_command, frames to keep before the closing starts")
     arg.add_argument("--min_frames", type=int, default=30, help="skip episodes with fewer post-grasp frames than this")
+    arg.add_argument(
+        "--end_at",
+        action="append",
+        default=[],
+        metavar="EPISODE=FRAME",
+        help="end this episode at FRAME (exclusive, in original frame numbers) instead of where --tail puts it; repeatable",
+    )
     args = arg.parse_args()
 
     trim_post_grasp(
@@ -270,4 +288,5 @@ if __name__ == "__main__":
         args.pre_close_frames,
         args.tail == "keep",
         args.min_frames,
+        {name: int(frame) for name, frame in (item.split("=", 1) for item in args.end_at)},
     )
